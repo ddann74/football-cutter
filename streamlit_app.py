@@ -1,82 +1,62 @@
 import streamlit as st
 import time
 import re
-import cv2  # This is the "Eyes" of our AI
-import numpy as np
+import os
+from moviepy.editor import VideoFileClip # The Scissors
 
 # --- LOGIC FUNCTIONS ---
 def parse_report(text):
     pattern = r"(\d{1,2}\+?\d?[':])\s*(.*)"
     return re.findall(pattern, text)
 
-def detect_kickoff(video_path):
-    """
-    Simulates AI scanning the video for the kickoff.
-    In a full version, this uses OpenCV to detect the center circle.
-    """
-    # This is a placeholder for the OpenCV logic
-    # It scans for high green-pixel density + white line detection
-    progress_bar = st.progress(0)
-    for percent_complete in range(100):
-        time.sleep(0.02)
-        progress_bar.progress(percent_complete + 1)
-    
-    # Let's assume for this version we found the kickoff at 00:42
-    return "00:42"
+def get_seconds(time_str):
+    """Converts 00:42 or 12' to total seconds."""
+    time_str = time_str.replace("'", "")
+    if ":" in time_str:
+        m, s = map(int, time_str.split(":"))
+        return m * 60 + s
+    return int(time_str) * 60
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Football Highlight Cutter", page_icon="⚽", layout="wide")
-
 st.title("⚽ Football Highlight Cutter")
 
-# --- DATA STABILIZATION SECTION ---
-st.divider()
-st.subheader("System Status")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.markdown("### Data Stabilization")
-    stabilization_placeholder = st.empty()
-    stabilization_placeholder.info("⚪ Waiting for Video & Report")
-
-with col2:
-    sync_score = st.empty()
-    sync_score.metric("Sync Accuracy", "0%")
-
-with col3:
-    kickoff_time_display = st.empty()
-    kickoff_time_display.metric("Kickoff Found", "--:--")
-
 # --- INPUT SECTION ---
-st.divider()
-report_text = st.text_area("1. Paste Match Report", height=150, placeholder="12' Goal - Messi...")
-video_file = st.file_uploader("2. Upload Match Video", type=['mp4', 'mov', 'avi'])
+report_text = st.text_area("1. Paste Match Report", height=150)
+video_file = st.file_uploader("2. Upload Match Video", type=['mp4'])
 
-if st.button("🚀 Start AI Analysis"):
+if st.button("🚀 Cut Highlights"):
     if report_text and video_file:
-        # STEP 1: PARSING TEXT
-        stabilization_placeholder.warning("🟡 Parsing Report...")
-        found_events = parse_report(report_text)
-        
-        # STEP 2: KICKOFF DETECTION (The Brain)
-        stabilization_placeholder.warning("🟡 Scanning Video for Kickoff...")
-        # We save the uploaded file temporarily to read it
-        with open("temp_video.mp4", "wb") as f:
+        # 1. Save uploaded file
+        with open("raw_video.mp4", "wb") as f:
             f.write(video_file.read())
         
-        kickoff_ts = detect_kickoff("temp_video.mp4")
+        # 2. Data Stabilization (Parsing)
+        events = parse_report(report_text)
+        kickoff_sec = 42  # Simplified: Assuming kickoff is at 42 seconds
         
-        # STEP 3: FINAL STABILIZATION
-        if found_events and kickoff_ts:
-            stabilization_placeholder.success("🟢 Data Stabilized & Kickoff Found")
-            sync_score.metric("Sync Accuracy", "99%", delta="Optimized")
-            kickoff_time_display.metric("Kickoff Found", kickoff_ts)
+        st.write(f"### ✂️ Cutting {len(events)} Highlights...")
+        
+        video = VideoFileClip("raw_video.mp4")
+        
+        for i, (match_min, action) in enumerate(events):
+            # Calculate timing: Start 10s before event, end 5s after
+            event_sec = kickoff_sec + get_seconds(match_min)
+            start_time = max(0, event_sec - 10)
+            end_time = min(video.duration, event_sec + 5)
             
-            st.write(f"### 🎬 Results")
-            st.info(f"The match starts at **{kickoff_ts}** in your video. All timestamps are now synced!")
+            st.write(f"Processing: {match_min} - {action}...")
             
-            for time_stamp, action in found_events:
-                st.write(f"📍 **{time_stamp}** -> Expected at video time: [Calculated Offset]")
-            st.balloons()
+            # Cut the clip
+            new_clip = video.subclip(start_time, end_time)
+            output_filename = f"highlight_{i}.mp4"
+            new_clip.write_videofile(output_filename, codec="libx264", audio_codec="aac")
+            
+            # Provide Download Button
+            with open(output_filename, "rb") as file:
+                st.download_button(label=f"Download {action}", data=file, file_name=output_filename)
+        
+        video.close()
+        st.success("All highlights cut successfully!")
     else:
-        st.error("Please provide both a report and a video file.")
+        st.error("Missing input data.")
