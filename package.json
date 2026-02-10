@@ -3,5 +3,10 @@
     "react": "latest",
     "react-dom": "latest",
     "next": "latest"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
   }
 }
