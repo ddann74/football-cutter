@@ -1,4 +1,7 @@
 streamlit
+opencv-python-headlessstreamlit
 opencv-python-headless
+numpy
+moviepy>=2.0.0
 numpy
 moviepy
