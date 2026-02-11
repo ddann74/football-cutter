@@ -7,7 +7,7 @@ import time
 import gc
 import shutil
 
-# --- 1. ROBUST IMPORT ---
+# --- 1. ROBUST VERSION-SAFE MOVIEPY IMPORT ---
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -16,8 +16,9 @@ except ImportError:
     except ImportError:
         st.error("MoviePy not found. Please add 'moviepy' to requirements.txt")
 
-# --- 2. DATA EXTRACTION ---
+# --- 2. DATA EXTRACTION & CLASSIFICATION ---
 def parse_report(text):
+    # Regex to find time (e.g. 12') and the following text description
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
@@ -61,11 +62,10 @@ def detect_kickoff_ai(video_path, start_min, end_min):
     cap.release()
     return 0
 
-# --- 4. UI SETUP ---
+# --- 4. UI SETUP & DATA STABILIZATION INDICATOR ---
 st.set_page_config(page_title="Football Cutter Pro", page_icon="⚽", layout="wide")
 st.title("⚽ AI Football Highlight Cutter")
 
-# --- 5. SYSTEM STATUS & DATA STABILIZATION ---
 st.divider()
 st.subheader("System Status")
 col1, col2, col3 = st.columns(3)
@@ -80,12 +80,12 @@ with col3:
     kickoff_display = st.empty()
     kickoff_display.metric("Kickoff Found", "--:--")
 
-# --- 6. INPUTS ---
+# --- 5. INPUTS ---
 st.divider()
 col_left, col_right = st.columns(2)
 
 with col_left:
-    report_text = st.text_area("1. Paste Match Report", height=150, placeholder="12' Goal - Messi")
+    report_text = st.text_area("1. Paste Match Report", height=150, placeholder="12' Goal - Messi\n44' Foul - Ramos")
     video_file = st.file_uploader("2. Upload Match Video", type=['mp4', 'mov', 'avi'])
 
 with col_right:
@@ -102,12 +102,12 @@ with col_right:
         st.write("AI Search Window:")
         search_window = st.slider("Window (Minutes)", 0, 60, (19, 22))
 
-# --- 7. THE ENGINE ---
+# --- 6. PROCESSING ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
     if report_text and video_file:
-        # Create a totally unique workspace for this run
-        run_id = str(int(time.time()))
-        workspace = f"work_{run_id}"
+        # Create a unique folder for this session to prevent file collision
+        session_id = str(int(time.time()))
+        workspace = f"work_{session_id}"
         os.makedirs(workspace, exist_ok=True)
 
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Match Data...")
@@ -120,7 +120,7 @@ if st.button("🚀 Start Stabilization & Cut"):
             with open(temp_source, "wb") as f:
                 f.write(video_file.getbuffer())
             
-            # Kickoff Sync
+            # Kickoff Sync & Data Stabilization
             if mode == "Manual Entry":
                 kickoff_sec = manual_total_sec
                 stabilization_placeholder.success("🟢 Phase 2: Manual Stabilization Active")
@@ -140,49 +140,42 @@ if st.button("🚀 Start Stabilization & Cut"):
                 
                 for i, (match_min, action) in enumerate(events):
                     target_sec = kickoff_sec + get_seconds(match_min)
-                    out_path = os.path.join(workspace, f"final_{i}.mp4")
                     
-                    with st.status(f"Stabilizing & Cutting: {match_min}"):
-                        # 1. LOAD: Fresh instance
+                    # Classification detection
+                    action_type = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
+                    out_path = os.path.join(workspace, f"{action_type}_{i}.mp4")
+                    
+                    with st.status(f"Cutting {match_min}: {action_type}"):
+                        # Load fresh instance inside loop to break internal cache
                         video = VideoFileClip(temp_source)
-                        
-                        # 2. SLICE: Absolute timestamps
                         start = max(0, target_sec - 10)
                         end = min(video.duration, target_sec + 5)
                         
-                        # 3. VERSION CHECK: MoviePy 2.x support
+                        # Use MoviePy 2.x absolute slicing (sub_clip)
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start, end)
                         else:
                             clip = video.subclip(start, end)
                         
-                        # 4. WRITE: Force clean FFMPEG session
-                        clip.write_videofile(
-                            out_path, 
-                            codec="libx264", 
-                            audio_codec="aac", 
-                            logger=None,
-                            temp_audiofile=os.path.join(workspace, f"temp_{i}.m4a"),
-                            remove_temp=True
-                        )
+                        clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
                         
-                        # 5. PURGE: Force deep cleanup
+                        # FORCE DEEP PURGE TO FIX "SAME VIDEO" BUG
                         clip.close()
                         video.close()
                         del clip
                         del video
-                        gc.collect()
-                        time.sleep(0.2) # Breath for the OS to release file lock
+                        gc.collect() 
+                        time.sleep(0.1) # Small delay for OS file release
 
-                    # 6. DOWNLOAD
+                    # Render Download
                     with open(out_path, "rb") as f:
                         st.download_button(
-                            label=f"Download {match_min} - {action[:10]}",
+                            label=f"Download {match_min} - {action[:15]}",
                             data=f,
-                            file_name=f"clip_{match_min}.mp4",
-                            key=f"btn_{run_id}_{i}"
+                            file_name=f"{action_type}_{match_min}.mp4",
+                            key=f"dl_{session_id}_{i}"
                         )
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
     else:
-        st.error("Missing inputs.")
+        st.error("Please provide both report and video.")
