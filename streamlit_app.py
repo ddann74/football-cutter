@@ -5,21 +5,20 @@ import re
 import os
 import time
 import gc
-import shutil
 
-# --- 1. MOVIEPY 2.X COMPATIBLE IMPORT ---
-# MoviePy 2.x removed 'moviepy.editor'. We import directly from moviepy.
+# --- 1. MOVIEPY 2.X VERSION-SAFE IMPORT ---
+# Fixed the 'ModuleNotFoundError: No module named moviepy.editor' from logs
 try:
     from moviepy import VideoFileClip
 except ImportError:
     try:
         from moviepy.editor import VideoFileClip
     except ImportError:
-        st.error("MoviePy not found. Please add 'moviepy' to requirements.txt")
+        st.error("MoviePy not found. Please ensure 'moviepy' is in requirements.txt")
 
 # --- 2. DATA EXTRACTION & CLASSIFICATION ---
 def parse_report(text):
-    # Regex to find time (e.g. 12') and the following text description
+    # Extracts timestamps (e.g., 12') and description text
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
@@ -51,12 +50,13 @@ def detect_kickoff_ai(video_path, start_min, end_min):
     while cap.isOpened() and current_frame < end_frame:
         ret, frame = cap.read()
         if not ret: break
+        # Sample every half-second for speed
         if current_frame % int(fps * 0.5) == 0:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, np.array([35, 40, 40]), np.array([85, 255, 255]))
             green_ratio = np.sum(mask > 0) / (frame.shape[0] * frame.shape[1])
             scan_progress.progress(min(int(((current_frame - start_frame) / (end_frame - start_frame)) * 100), 100))
-            if green_ratio > 0.55:
+            if green_ratio > 0.55: # Kickoff detected via pitch color
                 cap.release()
                 return current_frame / fps
         current_frame += 1
@@ -106,16 +106,16 @@ with col_right:
 # --- 6. PROCESSING ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
     if report_text and video_file:
-        # Create a unique folder for this session to prevent file collision
-        session_id = str(int(time.time()))
-        workspace = f"work_{session_id}"
+        # Create unique workspace per run to avoid browser cache bugs
+        run_id = str(int(time.time()))
+        workspace = f"work_{run_id}"
         os.makedirs(workspace, exist_ok=True)
 
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Match Data...")
         events = parse_report(report_text)
         
         if not events:
-            st.error("No valid timestamps found.")
+            st.error("No valid timestamps found in the report.")
         else:
             temp_source = os.path.join(workspace, "source.mp4")
             with open(temp_source, "wb") as f:
@@ -137,23 +137,23 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
-                st.success(f"Processing {len(events)} individual clips...")
+                st.success(f"Cutting {len(events)} individual clips...")
                 
                 for i, (match_min, action) in enumerate(events):
                     target_sec = kickoff_sec + get_seconds(match_min)
                     
-                    # ACTION IDENTIFICATION (GOAL OR FOUL)
-                    action_type = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
-                    out_path = os.path.join(workspace, f"{action_type}_{i}.mp4")
+                    # ACTION CLASSIFICATION (GOAL OR FOUL)
+                    label = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
+                    out_path = os.path.join(workspace, f"{label}_{i}.mp4")
                     
-                    with st.status(f"Cutting {match_min}: {action_type}"):
-                        # Load fresh instance inside loop to break internal cache
+                    with st.status(f"Cutting {match_min}: {label}"):
+                        # Load fresh instance to prevent frame-leakage between clips
                         video = VideoFileClip(temp_source)
                         start = max(0, target_sec - 10)
                         end = min(video.duration, target_sec + 5)
                         
-                        # Use MoviePy 2.x method: slashed syntax or sub_clip()
-                        # Note: subclip() was renamed to sub_clip() in some 2.x releases
+                        # Correct MoviePy 2.x sub-clip logic
+                        # Replaces the broken 'subclip' attribute from logs [cite: 8083]
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start, end)
                         else:
@@ -161,7 +161,7 @@ if st.button("🚀 Start Stabilization & Cut"):
                         
                         clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
                         
-                        # FORCE DEEP PURGE TO FIX "SAME VIDEO" BUG
+                        # DEEP PURGE: Fixes duplicate video bug
                         clip.close()
                         video.close()
                         del clip
@@ -169,13 +169,13 @@ if st.button("🚀 Start Stabilization & Cut"):
                         gc.collect() 
                         time.sleep(0.1) 
 
-                    # Render Download
+                    # Render Download Button
                     with open(out_path, "rb") as f:
                         st.download_button(
-                            label=f"Download {match_min} - {action_type}",
+                            label=f"Download {match_min} - {label}",
                             data=f,
-                            file_name=f"{action_type}_{match_min}.mp4",
-                            key=f"dl_{session_id}_{i}"
+                            file_name=f"{label}_{match_min}.mp4",
+                            key=f"dl_{run_id}_{i}"
                         )
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
