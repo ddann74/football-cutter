@@ -3,9 +3,10 @@ import cv2
 import numpy as np
 import re
 import requests
-from bs4 import BeautifulSoup # Added as requested for URL support
+from bs4 import BeautifulSoup
 import time
-from moviepy.video.io.VideoFileClip import VideoFileClip # Corrected import path
+import os
+from moviepy.video.io.VideoFileClip import VideoFileClip
 
 # --- 1. DATA EXTRACTION LOGIC ---
 def parse_report(text):
@@ -16,7 +17,9 @@ def parse_report(text):
 def scrape_report_from_url(url):
     """Fetches text content from a match report URL."""
     try:
-        response = requests.get(url, timeout=10)
+        # We add a User-Agent to prevent websites from blocking the scraper
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
         return soup.get_text()
     except Exception as e:
@@ -36,16 +39,19 @@ def detect_kickoff_visual(video_path):
     """AI logic scanning for the green pitch to find the kickoff time."""
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps == 0: fps = 25 # Fallback
+    
     frame_count = 0
     found_time = 0
     scan_progress = st.progress(0)
     
+    # Optimized scan: Look at one frame every 2 seconds to speed up 200MB+ files
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret or frame_count > fps * 300: # Limit scan to first 5 minutes
             break
             
-        if frame_count % 30 == 0:
+        if frame_count % int(fps * 2) == 0:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             lower_green = np.array([35, 40, 40])
             upper_green = np.array([85, 255, 255])
@@ -68,7 +74,7 @@ def detect_kickoff_visual(video_path):
 
 # --- 3. UI SETUP ---
 st.set_page_config(page_title="Football Highlight Cutter", page_icon="⚽", layout="wide")
-st.title("⚽ Football Highlight Cutter")
+st.title("⚽ Football Highlight Cutter (High Capacity)")
 
 # --- 4. DATA STABILIZATION INDICATORS ---
 st.divider()
@@ -76,7 +82,7 @@ st.subheader("System Status")
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.markdown("### Data Stabilization") # Your requested feature
+    st.markdown("### Data Stabilization")
     stabilization_placeholder = st.empty()
     stabilization_placeholder.info("⚪ Waiting for Input")
 
@@ -98,9 +104,10 @@ if input_mode == "Paste Text":
 else:
     report_url = st.text_input("1. Match Report URL")
     if report_url:
-        report_content = scrape_report_from_url(report_url)
+        with st.spinner("Scraping report..."):
+            report_content = scrape_report_from_url(report_url)
 
-video_file = st.file_uploader("2. Upload Match Video", type=['mp4'])
+video_file = st.file_uploader("2. Upload Match Video (Up to 2GB)", type=['mp4', 'mov', 'avi'])
 
 if st.button("🚀 Start AI Sync & Cut"):
     if report_content and video_file:
@@ -109,14 +116,15 @@ if st.button("🚀 Start AI Sync & Cut"):
         events = parse_report(report_content)
         
         if not events:
-            st.error("No timestamps found in the report.")
+            st.error("No timestamps found. Ensure the report has formats like 12' or 45:00.")
         else:
             # Phase 2: Video
             stabilization_placeholder.warning("🟡 Phase 2: Detecting Kickoff...")
-            with open("temp_video.mp4", "wb") as f:
-                f.write(video_file.read())
+            temp_path = "temp_large_video.mp4"
+            with open(temp_path, "wb") as f:
+                f.write(video_file.getbuffer()) # Better for large files
             
-            kickoff_sec = detect_kickoff_visual("temp_video.mp4")
+            kickoff_sec = detect_kickoff_visual(temp_path)
             
             if kickoff_sec > 0:
                 # Phase 3: Final Sync
@@ -126,15 +134,28 @@ if st.button("🚀 Start AI Sync & Cut"):
                 kickoff_display.metric("Kickoff Found", f"{m:02d}:{s:02d}")
                 
                 # Phase 4: Cutting
-                video = VideoFileClip("temp_video.mp4")
+                video = VideoFileClip(temp_path)
+                st.write(f"### 🎬 Generated Clips ({len(events)})")
+                
                 for i, (match_min, action) in enumerate(events):
                     event_sec = kickoff_sec + get_seconds(match_min)
-                    clip = video.subclip(max(0, event_sec - 10), min(video.duration, event_sec + 5))
-                    out_name = f"highlight_{i}.mp4"
-                    clip.write_videofile(out_name, codec="libx264")
-                    st.download_button(f"Download: {match_min} {action}", open(out_name, "rb"), file_name=out_name)
+                    
+                    # Logic: 10s before event, 5s after
+                    start_t = max(0, event_sec - 10)
+                    end_t = min(video.duration, event_sec + 5)
+                    
+                    out_name = f"highlight_{match_min.replace(\"'\", \"\")}_{i}.mp4"
+                    
+                    with st.status(f"Cutting highlight: {match_min} {action}..."):
+                        clip = video.subclip(start_t, end_t)
+                        clip.write_videofile(out_name, codec="libx264", audio_codec="aac", temp_audiofile='temp-audio.m4a', remove_temp=True)
+                    
+                    with open(out_name, "rb") as f:
+                        st.download_button(f"Download: {match_min} {action}", f, file_name=out_name)
+                
                 video.close()
+                st.balloons()
             else:
-                stabilization_placeholder.error("🔴 Stabilization Failed.")
+                stabilization_placeholder.error("🔴 Stabilization Failed: Kickoff not found visually.")
     else:
-        st.error("Please provide both report and video.")
+        st.error("Missing input data.")
