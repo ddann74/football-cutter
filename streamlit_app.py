@@ -6,7 +6,7 @@ import os
 import time
 import gc
 
-# --- 1. MOVIEPY 2.X VERSION-SAFE IMPORT ---
+# --- 1. MOVIEPY 2.X COMPATIBLE IMPORT ---
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -17,7 +17,6 @@ except ImportError:
 
 # --- 2. DATA EXTRACTION & CLASSIFICATION ---
 def parse_report(text):
-    # Extracts timestamps (e.g., 12') and description text
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
@@ -104,7 +103,6 @@ with col_right:
 # --- 6. PROCESSING ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
     if report_text and video_file:
-        # Unique session path to prevent browser cache from serving old video data
         session_id = str(int(time.time()))
         workspace = f"work_{session_id}"
         os.makedirs(workspace, exist_ok=True)
@@ -113,13 +111,13 @@ if st.button("🚀 Start Stabilization & Cut"):
         events = parse_report(report_text)
         
         if not events:
-            st.error("No valid timestamps found in the report.")
+            st.error("No valid timestamps found.")
         else:
             temp_source = os.path.join(workspace, "source.mp4")
             with open(temp_source, "wb") as f:
                 f.write(video_file.getbuffer())
             
-            # Kickoff Sync & Data Stabilization
+            # Kickoff Sync
             if mode == "Manual Entry":
                 kickoff_sec = manual_total_sec
                 stabilization_placeholder.success("🟢 Phase 2: Manual Stabilization Active")
@@ -135,31 +133,33 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
-                st.success(f"Cutting {len(events)} individual clips...")
+                st.success(f"Cutting {len(events)} clips...")
                 
                 for i, (match_min, action) in enumerate(events):
                     target_sec = kickoff_sec + get_seconds(match_min)
                     
-                    # ACTION IDENTIFICATION (GOAL OR FOUL)
+                    # Classification (Goal/Foul)
                     label = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
                     out_path = os.path.join(workspace, f"{label}_{i}.mp4")
                     
-                    with st.status(f"Cutting {match_min}: {label}"):
-                        # Load fresh instance inside loop to break internal cache
+                    with st.status(f"Processing {match_min}: {label}"):
                         video = VideoFileClip(temp_source)
                         start = max(0, target_sec - 10)
                         end = min(video.duration, target_sec + 5)
                         
-                        # MoviePy 2.x absolute slicing fix
-                        if hasattr(video, 'sub_clip'):
-                            clip = video.sub_clip(start, end)
-                        else:
-                            # Fallback to slice notation or subclip for legacy compatibility
-                            clip = video.subclip(start, end)
+                        # MOVIEPY 2.X VERSION FIX:
+                        # Attempt to use the new method name 'sub_clip', then fallback
+                        try:
+                            if hasattr(video, 'sub_clip'):
+                                clip = video.sub_clip(start, end)
+                            else:
+                                clip = video.subclip(start, end)
+                        except Exception:
+                            # Final fallback for v2.x slicing syntax
+                            clip = video.sliced(start, end)
                         
                         clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
                         
-                        # FORCE DEEP PURGE: Unlocks the file so the next loop can cut accurately
                         clip.close()
                         video.close()
                         del clip
@@ -167,7 +167,6 @@ if st.button("🚀 Start Stabilization & Cut"):
                         gc.collect() 
                         time.sleep(0.1) 
 
-                    # Render Download Button with unique session key
                     with open(out_path, "rb") as f:
                         st.download_button(
                             label=f"Download {match_min} - {label}",
