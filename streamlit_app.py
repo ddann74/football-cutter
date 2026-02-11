@@ -5,9 +5,10 @@ import re
 import os
 import time
 import gc
+import shutil
 
-# --- 1. ROBUST VERSION-SAFE MOVIEPY IMPORT ---
-# Fixes 'ModuleNotFoundError: No module named moviepy.editor'
+# --- 1. MOVIEPY 2.X COMPATIBLE IMPORT ---
+# MoviePy 2.x removed 'moviepy.editor'. We import directly from moviepy.
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -16,9 +17,9 @@ except ImportError:
     except ImportError:
         st.error("MoviePy not found. Please add 'moviepy' to requirements.txt")
 
-# --- 2. LOGIC: PARSING THE REPORT ---
+# --- 2. DATA EXTRACTION & CLASSIFICATION ---
 def parse_report(text):
-    # Regex to extract time and description
+    # Regex to find time (e.g. 12') and the following text description
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
@@ -62,7 +63,7 @@ def detect_kickoff_ai(video_path, start_min, end_min):
     cap.release()
     return 0
 
-# --- 4. UI SETUP & INDICATORS ---
+# --- 4. UI SETUP & DATA STABILIZATION INDICATOR ---
 st.set_page_config(page_title="Football Cutter Pro", page_icon="⚽", layout="wide")
 st.title("⚽ AI Football Highlight Cutter")
 
@@ -102,12 +103,12 @@ with col_right:
         st.write("AI Search Window:")
         search_window = st.slider("Window (Minutes)", 0, 60, (19, 22))
 
-# --- 6. CORE PROCESSING ENGINE ---
+# --- 6. PROCESSING ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
     if report_text and video_file:
-        # Unique workspace for each run to bypass cache issues
-        run_id = str(int(time.time()))
-        workspace = f"work_{run_id}"
+        # Create a unique folder for this session to prevent file collision
+        session_id = str(int(time.time()))
+        workspace = f"work_{session_id}"
         os.makedirs(workspace, exist_ok=True)
 
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Match Data...")
@@ -120,7 +121,7 @@ if st.button("🚀 Start Stabilization & Cut"):
             with open(temp_source, "wb") as f:
                 f.write(video_file.getbuffer())
             
-            # Kickoff Synchronization
+            # Kickoff Sync & Data Stabilization
             if mode == "Manual Entry":
                 kickoff_sec = manual_total_sec
                 stabilization_placeholder.success("🟢 Phase 2: Manual Stabilization Active")
@@ -136,22 +137,23 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
-                st.success(f"Processing {len(events)} clips...")
+                st.success(f"Processing {len(events)} individual clips...")
                 
                 for i, (match_min, action) in enumerate(events):
                     target_sec = kickoff_sec + get_seconds(match_min)
                     
-                    # Action Classification
-                    label = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
-                    out_path = os.path.join(workspace, f"{label}_{i}.mp4")
+                    # ACTION IDENTIFICATION (GOAL OR FOUL)
+                    action_type = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
+                    out_path = os.path.join(workspace, f"{action_type}_{i}.mp4")
                     
-                    with st.status(f"Cutting {match_min}: {label}"):
-                        # Load fresh to ensure no frame leakage between clips
+                    with st.status(f"Cutting {match_min}: {action_type}"):
+                        # Load fresh instance inside loop to break internal cache
                         video = VideoFileClip(temp_source)
                         start = max(0, target_sec - 10)
                         end = min(video.duration, target_sec + 5)
                         
-                        # Fix for VideoClip.cropped() and syntax issues
+                        # Use MoviePy 2.x method: slashed syntax or sub_clip()
+                        # Note: subclip() was renamed to sub_clip() in some 2.x releases
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start, end)
                         else:
@@ -159,22 +161,23 @@ if st.button("🚀 Start Stabilization & Cut"):
                         
                         clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
                         
-                        # Memory Cleanup
+                        # FORCE DEEP PURGE TO FIX "SAME VIDEO" BUG
                         clip.close()
                         video.close()
                         del clip
                         del video
-                        gc.collect()
+                        gc.collect() 
+                        time.sleep(0.1) 
 
-                    # Download UI
+                    # Render Download
                     with open(out_path, "rb") as f:
                         st.download_button(
-                            label=f"Download {match_min} - {label}",
+                            label=f"Download {match_min} - {action_type}",
                             data=f,
-                            file_name=f"{label}_{match_min}.mp4",
-                            key=f"btn_{run_id}_{i}"
+                            file_name=f"{action_type}_{match_min}.mp4",
+                            key=f"dl_{session_id}_{i}"
                         )
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
     else:
-        st.error("Missing inputs.")
+        st.error("Please provide both report and video.")
