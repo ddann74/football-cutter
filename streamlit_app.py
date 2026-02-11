@@ -145,17 +145,14 @@ if st.button("🚀 Start Stabilization & Cut"):
                         start = max(0, target_sec - 10)
                         end = min(video.duration, target_sec + 5)
                         
-                        # --- UNIVERSAL MOVIEPY 2.X TRIMMING FALLBACK ---
-                        clip = None
+                        # --- UNIVERSAL MOVIEPY 2.X TRIMMING FIX ---
+                        # In v2.x, bracket notation video[start:end] is the most reliable way.
                         try:
-                            # Strategy A: with_section (Standard MoviePy 2.x)
-                            clip = video.with_section((start, end))
+                            clip = video[start:end]
                         except:
                             try:
-                                # Strategy B: sub_clip (Some 2.x releases)
                                 clip = video.sub_clip(start, end)
                             except:
-                                # Strategy C: subclip (Legacy 1.x)
                                 clip = video.subclip(start, end)
                         
                         if clip:
