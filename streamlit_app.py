@@ -3,7 +3,12 @@ import cv2
 import numpy as np
 import re
 import os
-from moviepy.video.io.VideoFileClip import VideoFileClip
+
+# Updated Import for MoviePy 2.0+ compatibility
+try:
+    from moviepy import VideoFileClip
+except ImportError:
+    from moviepy.editor import VideoFileClip
 
 # --- 1. DATA EXTRACTION ---
 def parse_report(text):
@@ -26,11 +31,8 @@ def get_seconds(time_str):
         except:
             return 0
 
-# --- 2. IMPROVED AI KICKOFF DETECTION ---
+# --- 2. AI KICKOFF DETECTION ---
 def detect_kickoff_visual(video_path, max_minutes):
-    """
-    Scans the video for the pitch within the user-defined time limit.
-    """
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
     max_scan_seconds = max_minutes * 60 
@@ -44,10 +46,8 @@ def detect_kickoff_visual(video_path, max_minutes):
         if not ret or frame_count > fps * max_scan_seconds: 
             break
             
-        # Check one frame every 2 seconds for speed
         if frame_count % int(fps * 2) == 0:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            # Optimized green range for Data Stabilization
             lower_green = np.array([30, 40, 30])
             upper_green = np.array([90, 255, 255])
             mask = cv2.inRange(hsv, lower_green, upper_green)
@@ -55,14 +55,13 @@ def detect_kickoff_visual(video_path, max_minutes):
             
             progress_val = min(int((frame_count / (fps * max_scan_seconds)) * 100), 100)
             scan_progress.progress(progress_val)
-            status_text.text(f"Scanning: {int(frame_count/fps/60)}m {int(frame_count/fps%60)}s...")
+            status_text.text(f"Scanning for pitch: {int(frame_count/fps/60)}m {int(frame_count/fps%60)}s...")
 
-            if green_ratio > 0.55: # Pitch detected
+            if green_ratio > 0.55: 
                 cap.release()
                 scan_progress.empty()
                 status_text.empty()
                 return frame_count / fps
-                
         frame_count += 1
     
     cap.release()
@@ -83,11 +82,9 @@ with col1:
     stabilization_placeholder = st.empty()
     stabilization_placeholder.info("⚪ Waiting for Input")
 with col2:
-    sync_score = st.empty()
-    sync_score.metric("Sync Accuracy", "0%")
+    sync_score = st.metric("Sync Accuracy", "0%")
 with col3:
-    kickoff_display = st.empty()
-    kickoff_display.metric("Kickoff Found", "--:--")
+    kickoff_display = st.metric("Kickoff Found", "--:--")
 
 # --- 5. INPUTS ---
 st.divider()
@@ -99,24 +96,19 @@ with col_left:
 
 with col_right:
     st.info("⚙️ AI Scan Settings")
-    search_limit = st.slider("Search Limit (Minutes)", 5, 60, 15, help="How far into the video should the AI look for the kickoff?")
-    st.caption("Increase this if your video has a long pre-match intro.")
+    search_limit = st.slider("Search Limit (Minutes)", 5, 60, 15)
 
 # --- 6. EXECUTION ---
 if st.button("🚀 Start AI Sync & Cut"):
     if report_text and video_file:
-        # Phase 1: Text Stabilization
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Data...")
         events = parse_report(report_text)
         
         if not events:
-            st.error("No timestamps found in text. Use format like 12' or 12:00.")
+            st.error("No timestamps found in text.")
         else:
-            # Phase 2: Video Stabilization
             stabilization_placeholder.warning("🟡 Phase 2: Detecting Kickoff...")
             temp_path = "temp_video.mp4"
-            
-            # Save the uploaded file correctly
             with open(temp_path, "wb") as f:
                 f.write(video_file.getbuffer())
             
@@ -124,31 +116,30 @@ if st.button("🚀 Start AI Sync & Cut"):
             
             if kickoff_sec > 0:
                 stabilization_placeholder.success("🟢 Phase 3: Fully Stabilized")
-                sync_score.metric("Sync Accuracy", "99%")
-                m, s = divmod(int(kickoff_sec), 60)
-                kickoff_display.metric("Kickoff Found", f"{m:02d}:{s:02d}")
                 
-                # Phase 4: Cutting
-                # Explicitly using the saved temp_path to fix the FileNotFoundError
+                # Use sub_clip for MoviePy 2.0+ compatibility
                 video = VideoFileClip(temp_path)
-                st.success(f"Found {len(events)} events. Processing clips...")
+                st.success(f"Found {len(events)} events. Processing...")
                 
                 for i, (match_min, action) in enumerate(events):
                     event_sec = kickoff_sec + get_seconds(match_min)
                     out_name = f"clip_{i}.mp4"
                     
-                    with st.status(f"Cutting: {match_min} {action[:20]}..."):
-                        # Clip: 10s before to 5s after
+                    with st.status(f"Cutting: {match_min}..."):
                         start_t = max(0, event_sec - 10)
                         end_t = min(video.duration, event_sec + 5)
-                        clip = video.subclip(start_t, end_t)
+                        
+                        # Fix for MoviePy 2.0+ AttributeError
+                        if hasattr(video, 'sub_clip'):
+                            clip = video.sub_clip(start_t, end_t)
+                        else:
+                            clip = video.subclip(start_t, end_t)
+                            
                         clip.write_videofile(out_name, codec="libx264", audio_codec="aac")
                     
-                    st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}_highlight.mp4")
-                
+                    st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}.mp4")
                 video.close()
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
-                st.error(f"AI searched the first {search_limit} minutes but couldn't find the pitch.")
     else:
-        st.error("Please provide both the match report and the video file.")
+        st.error("Please provide both inputs.")
