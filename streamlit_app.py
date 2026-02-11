@@ -5,7 +5,7 @@ import re
 import os
 import time
 
-# Robust MoviePy import
+# Robust MoviePy import for version 1.x and 2.x compatibility
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -16,12 +16,12 @@ except ImportError:
 
 # --- 1. DATA EXTRACTION ---
 def parse_report(text):
-    """Extracts match minutes and descriptions."""
+    """Extracts match minutes and event descriptions."""
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
 def get_seconds(time_str):
-    """Converts match clock strings to seconds."""
+    """Converts match clock strings (e.g., 12', 45+2) to seconds."""
     clean_time = re.sub(r"[^0-9+:]", "", time_str)
     if ":" in clean_time:
         parts = clean_time.split(":")
@@ -39,7 +39,8 @@ def get_seconds(time_str):
 def detect_kickoff_ai(video_path, start_min, end_min):
     """Focused AI scan to find the green pitch."""
     cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened(): return 0
+    if not cap.isOpened():
+        return 0
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
     start_frame = int(start_min * 60 * fps)
     end_frame = int(end_min * 60 * fps)
@@ -131,22 +132,25 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
+                # Processing video
                 video = VideoFileClip(temp_path)
                 st.success(f"Processing {len(events)} highlights...")
                 
                 for i, (match_min, action) in enumerate(events):
                     event_sec = kickoff_sec + get_seconds(match_min)
-                    out_name = f"clip_{i}.mp4"
+                    out_name = f"highlight_{i}.mp4"
                     
                     with st.status(f"Cutting: {match_min} {action[:15]}..."):
                         start_t = max(0, event_sec - 10)
                         end_t = min(video.duration, event_sec + 5)
                         
-                        # V2.0+ SAFE TRIMMING
+                        # --- VERSION-AGNOSTIC TRIMMING ---
+                        # In MoviePy 2.x, subclip was renamed to sub_clip
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start_t, end_t)
                         else:
-                            clip = video.subclip(start_t, end_t)
+                            # Fallback for older MoviePy 1.x
+                            clip = getattr(video, 'subclip')(start_t, end_t)
                         
                         clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
                     
@@ -155,4 +159,4 @@ if st.button("🚀 Start Stabilization & Cut"):
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
     else:
-        st.error("Please provide both inputs.")
+        st.error("Please provide both the match report and the video file.")
