@@ -2,17 +2,17 @@ import streamlit as st
 import cv2
 import numpy as np
 import re
-import requests
-from bs4 import BeautifulSoup
 import os
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 # --- 1. DATA EXTRACTION ---
 def parse_report(text):
+    """Flexible regex to find timestamps: 12', 12:00, 12 min, etc."""
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
 def get_seconds(time_str):
+    """Converts match clock strings to seconds."""
     clean_time = re.sub(r"[^0-9+:]", "", time_str)
     if ":" in clean_time:
         parts = clean_time.split(":")
@@ -21,10 +21,12 @@ def get_seconds(time_str):
         parts = clean_time.split("+")
         return (int(parts[0]) + int(parts[1])) * 60
     else:
-        try: return int(clean_time) * 60
-        except: return 0
+        try:
+            return int(clean_time) * 60
+        except:
+            return 0
 
-# --- 2. AI KICKOFF DETECTION WITH TIME LIMIT ---
+# --- 2. IMPROVED AI KICKOFF DETECTION ---
 def detect_kickoff_visual(video_path, max_minutes):
     """
     Scans the video for the pitch within the user-defined time limit.
@@ -45,6 +47,7 @@ def detect_kickoff_visual(video_path, max_minutes):
         # Check one frame every 2 seconds for speed
         if frame_count % int(fps * 2) == 0:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            # Optimized green range for Data Stabilization
             lower_green = np.array([30, 40, 30])
             upper_green = np.array([90, 255, 255])
             mask = cv2.inRange(hsv, lower_green, upper_green)
@@ -102,14 +105,18 @@ with col_right:
 # --- 6. EXECUTION ---
 if st.button("🚀 Start AI Sync & Cut"):
     if report_text and video_file:
+        # Phase 1: Text Stabilization
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Data...")
         events = parse_report(report_text)
         
         if not events:
-            st.error("No timestamps found in text.")
+            st.error("No timestamps found in text. Use format like 12' or 12:00.")
         else:
+            # Phase 2: Video Stabilization
             stabilization_placeholder.warning("🟡 Phase 2: Detecting Kickoff...")
             temp_path = "temp_video.mp4"
+            
+            # Save the uploaded file correctly
             with open(temp_path, "wb") as f:
                 f.write(video_file.getbuffer())
             
@@ -121,17 +128,27 @@ if st.button("🚀 Start AI Sync & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Found", f"{m:02d}:{s:02d}")
                 
+                # Phase 4: Cutting
+                # Explicitly using the saved temp_path to fix the FileNotFoundError
                 video = VideoFileClip(temp_path)
+                st.success(f"Found {len(events)} events. Processing clips...")
+                
                 for i, (match_min, action) in enumerate(events):
                     event_sec = kickoff_sec + get_seconds(match_min)
                     out_name = f"clip_{i}.mp4"
-                    with st.status(f"Cutting: {match_min}..."):
-                        clip = video.subclip(max(0, event_sec-10), min(video.duration, event_sec+5))
+                    
+                    with st.status(f"Cutting: {match_min} {action[:20]}..."):
+                        # Clip: 10s before to 5s after
+                        start_t = max(0, event_sec - 10)
+                        end_t = min(video.duration, event_sec + 5)
+                        clip = video.subclip(start_t, end_t)
                         clip.write_videofile(out_name, codec="libx264", audio_codec="aac")
-                    st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}.mp4")
+                    
+                    st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}_highlight.mp4")
+                
                 video.close()
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
                 st.error(f"AI searched the first {search_limit} minutes but couldn't find the pitch.")
     else:
-        st.error("Please provide both inputs.")
+        st.error("Please provide both the match report and the video file.")
