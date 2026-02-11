@@ -5,8 +5,9 @@ import re
 import os
 import time
 import gc
+import shutil
 
-# --- 1. VERSION-SAFE MOVIEPY IMPORT ---
+# --- 1. ROBUST IMPORT ---
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -64,7 +65,7 @@ def detect_kickoff_ai(video_path, start_min, end_min):
 st.set_page_config(page_title="Football Cutter Pro", page_icon="⚽", layout="wide")
 st.title("⚽ AI Football Highlight Cutter")
 
-# --- 5. SYSTEM DASHBOARD (Data Stabilization) ---
+# --- 5. SYSTEM STATUS & DATA STABILIZATION ---
 st.divider()
 st.subheader("System Status")
 col1, col2, col3 = st.columns(3)
@@ -77,7 +78,7 @@ with col2:
     sync_score.metric("Sync Accuracy", "0%")
 with col3:
     kickoff_display = st.empty()
-    kickoff_display.metric("Kickoff Point", "--:--")
+    kickoff_display.metric("Kickoff Found", "--:--")
 
 # --- 6. INPUTS ---
 st.divider()
@@ -101,27 +102,32 @@ with col_right:
         st.write("AI Search Window:")
         search_window = st.slider("Window (Minutes)", 0, 60, (19, 22))
 
-# --- 7. CORE ENGINE ---
+# --- 7. THE ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
     if report_text and video_file:
+        # Create a totally unique workspace for this run
+        run_id = str(int(time.time()))
+        workspace = f"work_{run_id}"
+        os.makedirs(workspace, exist_ok=True)
+
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Match Data...")
         events = parse_report(report_text)
         
         if not events:
             st.error("No valid timestamps found.")
         else:
-            temp_path = "match_source.mp4"
-            with open(temp_path, "wb") as f:
+            temp_source = os.path.join(workspace, "source.mp4")
+            with open(temp_source, "wb") as f:
                 f.write(video_file.getbuffer())
             
-            # Lock the Kickoff
+            # Kickoff Sync
             if mode == "Manual Entry":
                 kickoff_sec = manual_total_sec
                 stabilization_placeholder.success("🟢 Phase 2: Manual Stabilization Active")
                 sync_score.metric("Sync Accuracy", "100% (Manual)")
             else:
                 stabilization_placeholder.warning("🟡 Phase 2: AI Scanning...")
-                kickoff_sec = detect_kickoff_ai(temp_path, search_window[0], search_window[1])
+                kickoff_sec = detect_kickoff_ai(temp_source, search_window[0], search_window[1])
                 if kickoff_sec > 0:
                     stabilization_placeholder.success("🟢 Phase 2: AI Stabilized")
                     sync_score.metric("Sync Accuracy", "98% (AI)")
@@ -130,48 +136,53 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
-                st.success(f"Cutting {len(events)} highlights. Please wait...")
+                st.success(f"Processing {len(events)} individual clips...")
                 
                 for i, (match_min, action) in enumerate(events):
-                    # Force a fresh time offset for every loop
-                    event_sec = kickoff_sec + get_seconds(match_min)
+                    target_sec = kickoff_sec + get_seconds(match_min)
+                    out_path = os.path.join(workspace, f"final_{i}.mp4")
                     
-                    # Generate a unique physical filename to bypass OS caching
-                    unique_id = int(time.time()) + i
-                    out_name = f"highlight_{unique_id}.mp4"
-                    
-                    with st.status(f"Processing Clip {i+1}: {match_min}..."):
-                        # RE-INITIALIZE EVERYTHING INSIDE THE LOOP
-                        video = VideoFileClip(temp_path)
-                        start_t = max(0, event_sec - 10)
-                        end_t = min(video.duration, event_sec + 5)
+                    with st.status(f"Stabilizing & Cutting: {match_min}"):
+                        # 1. LOAD: Fresh instance
+                        video = VideoFileClip(temp_source)
                         
-                        # --- USE THE V2.X SLICING METHOD ---
+                        # 2. SLICE: Absolute timestamps
+                        start = max(0, target_sec - 10)
+                        end = min(video.duration, target_sec + 5)
+                        
+                        # 3. VERSION CHECK: MoviePy 2.x support
                         if hasattr(video, 'sub_clip'):
-                            clip = video.sub_clip(start_t, end_t)
+                            clip = video.sub_clip(start, end)
                         else:
-                            # Direct time assignment
-                            clip = video.with_start(start_t).with_end(end_t).with_duration(end_t - start_t)
+                            clip = video.subclip(start, end)
                         
-                        # Write to the unique filename
-                        clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
+                        # 4. WRITE: Force clean FFMPEG session
+                        clip.write_videofile(
+                            out_path, 
+                            codec="libx264", 
+                            audio_codec="aac", 
+                            logger=None,
+                            temp_audiofile=os.path.join(workspace, f"temp_{i}.m4a"),
+                            remove_temp=True
+                        )
                         
-                        # HARD RESET OF OBJECTS
+                        # 5. PURGE: Force deep cleanup
                         clip.close()
                         video.close()
                         del clip
                         del video
-                        gc.collect() # Force garbage collection
-                    
-                    # Create the download button with a unique key
-                    with open(out_name, "rb") as f:
+                        gc.collect()
+                        time.sleep(0.2) # Breath for the OS to release file lock
+
+                    # 6. DOWNLOAD
+                    with open(out_path, "rb") as f:
                         st.download_button(
-                            label=f"Download {match_min} - {action[:15]}",
+                            label=f"Download {match_min} - {action[:10]}",
                             data=f,
-                            file_name=f"match_min_{match_min.replace('+', '_')}.mp4",
-                            key=f"btn_{unique_id}"
+                            file_name=f"clip_{match_min}.mp4",
+                            key=f"btn_{run_id}_{i}"
                         )
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
     else:
-        st.error("Please provide both the report and the video file.")
+        st.error("Missing inputs.")
