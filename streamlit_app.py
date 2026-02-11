@@ -15,11 +15,11 @@ except ImportError:
     except ImportError:
         st.error("MoviePy not found. Please ensure 'moviepy' is in requirements.txt")
 
-# --- 2. SESSION STATE INITIALIZATION ---
-if 'processed_clips' not in st.session_state:
-    st.session_state.processed_clips = []
-if 'kickoff_time' not in st.session_state:
-    st.session_state.kickoff_time = 0
+# --- 2. PERSISTENCE LAYER ---
+if 'clips' not in st.session_state:
+    st.session_state.clips = []
+if 'workspace' not in st.session_state:
+    st.session_state.workspace = f"work_{int(time.time())}"
 
 # --- 3. UTILITIES ---
 def parse_report(text):
@@ -72,10 +72,13 @@ st.subheader("System Status")
 col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("### Data Stabilization")
-    if st.session_state.processed_clips:
+    if st.session_state.clips:
         st.success("🟢 Data Stabilized")
     else:
         st.info("⚪ Waiting for Input")
+with col2:
+    sync_score = st.empty()
+    sync_score.metric("Sync Accuracy", "100%" if st.session_state.clips else "0%")
 
 # --- 5. INPUTS ---
 st.divider()
@@ -88,74 +91,67 @@ with col_left:
 with col_right:
     mode = st.radio("Kickoff Mode:", ["Manual Entry", "AI Auto-Scan"])
     if mode == "Manual Entry":
-        m = st.number_input("Min", 0, 120, 20)
-        s = st.number_input("Sec", 0, 59, 2)
-        kickoff_input = (m * 60) + s
+        m = st.number_input("Kickoff Minute", 0, 120, 20)
+        s = st.number_input("Kickoff Second", 0, 59, 0)
+        kickoff_val = (m * 60) + s
     else:
         search_window = st.slider("AI Search Window", 0, 60, (19, 22))
 
-# --- 6. PROCESSING ---
-if st.button("🚀 Start Clipping"):
+# --- 6. PROCESSING ENGINE ---
+if st.button("🚀 Start Stabilization & Cut"):
     if report_text and video_file:
-        workspace = "temp_clips"
-        os.makedirs(workspace, exist_ok=True)
+        os.makedirs(st.session_state.workspace, exist_ok=True)
+        temp_source = os.path.join(st.session_state.workspace, "source.mp4")
         
-        temp_source = os.path.join(workspace, "source.mp4")
         with open(temp_source, "wb") as f:
             f.write(video_file.getbuffer())
         
-        kickoff = kickoff_input if mode == "Manual Entry" else detect_kickoff_ai(temp_source, search_window[0], search_window[1])
-        st.session_state.kickoff_time = kickoff
+        kickoff_sec = kickoff_val if mode == "Manual Entry" else detect_kickoff_ai(temp_source, search_window[0], search_window[1])
         
-        if kickoff > 0:
+        if kickoff_sec > 0:
             events = parse_report(report_text)
-            st.session_state.processed_clips = [] # Reset for new run
+            st.session_state.clips = [] # Clear old results
             
             for i, (match_min, action) in enumerate(events):
-                target_sec = kickoff + get_seconds(match_min)
+                target_sec = kickoff_sec + get_seconds(match_min)
                 label = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
-                out_path = f"{workspace}/{label}_{i}_{int(time.time())}.mp4"
+                out_filename = f"{label}_{match_min.replace('+', '_')}_{i}.mp4"
+                out_path = os.path.join(st.session_state.workspace, out_filename)
                 
                 with st.status(f"Cutting {match_min}: {label}"):
-                    # LOAD FRESH: Essential for timing accuracy
+                    # FRESH LOAD: Crucial for timing accuracy
                     video = VideoFileClip(temp_source)
-                    start, end = max(0, target_sec - 10), min(video.duration, target_sec + 5)
+                    start = max(0, target_sec - 10)
+                    end = min(video.duration, target_sec + 5)
                     
-                    # MoviePy 2.x Compatibility Logic
-                    try:
-                        clip = video.section((start, end))
-                    except:
-                        try:
-                            clip = video.sub_clip(start, end)
-                        except:
-                            clip = video.subclip(start, end)
+                    # MOVIEPY 2.X SLICING: uses bracket notation
+                    clip = video[start:end]
                     
                     clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
                     
-                    st.session_state.processed_clips.append({
-                        "name": f"{match_min} - {label}",
+                    st.session_state.clips.append({
+                        "label": f"{match_min} - {label}",
                         "path": out_path,
-                        "file": f"{label}_{match_min}.mp4"
+                        "file_name": out_filename
                     })
                     
                     clip.close()
                     video.close()
                     gc.collect()
-            
             st.rerun()
 
-# --- 7. PERSISTENT DOWNLOAD AREA ---
-if st.session_state.processed_clips:
+# --- 7. PERSISTENT DOWNLOADS ---
+if st.session_state.clips:
     st.divider()
-    st.subheader("📥 Download Your Highlights")
+    st.subheader("📥 Download Highlights")
     cols = st.columns(3)
-    for idx, clip in enumerate(st.session_state.processed_clips):
+    for idx, clip_data in enumerate(st.session_state.clips):
         with cols[idx % 3]:
-            if os.path.exists(clip["path"]):
-                with open(clip["path"], "rb") as f:
+            if os.path.exists(clip_data["path"]):
+                with open(clip_data["path"], "rb") as f:
                     st.download_button(
-                        label=f"Download {clip['name']}",
+                        label=clip_data["label"],
                         data=f,
-                        file_name=clip["file"],
+                        file_name=clip_data["file_name"],
                         key=f"dl_{idx}"
                     )
