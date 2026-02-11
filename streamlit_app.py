@@ -15,9 +15,14 @@ except ImportError:
     except ImportError:
         st.error("MoviePy not found. Please ensure 'moviepy' is in requirements.txt")
 
-# --- 2. DATA EXTRACTION & CLASSIFICATION ---
+# --- 2. SESSION STATE INITIALIZATION ---
+if 'processed_clips' not in st.session_state:
+    st.session_state.processed_clips = []
+if 'kickoff_time' not in st.session_state:
+    st.session_state.kickoff_time = 0
+
+# --- 3. UTILITIES ---
 def parse_report(text):
-    # Extracts timestamps (e.g., 12') and description text
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
@@ -30,12 +35,9 @@ def get_seconds(time_str):
         parts = clean_time.split("+")
         return (int(parts[0]) + int(parts[1])) * 60
     else:
-        try:
-            return int(clean_time) * 60
-        except:
-            return 0
+        try: return int(clean_time) * 60
+        except: return 0
 
-# --- 3. AI KICKOFF DETECTION ---
 def detect_kickoff_ai(video_path, start_min, end_min):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened(): return 0
@@ -61,7 +63,7 @@ def detect_kickoff_ai(video_path, start_min, end_min):
     cap.release()
     return 0
 
-# --- 4. UI SETUP & DATA STABILIZATION INDICATOR ---
+# --- 4. UI SETUP ---
 st.set_page_config(page_title="Football Cutter Pro", page_icon="⚽", layout="wide")
 st.title("⚽ AI Football Highlight Cutter")
 
@@ -70,14 +72,10 @@ st.subheader("System Status")
 col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("### Data Stabilization")
-    stabilization_placeholder = st.empty()
-    stabilization_placeholder.info("⚪ Waiting for Input")
-with col2:
-    sync_score = st.empty()
-    sync_score.metric("Sync Accuracy", "0%")
-with col3:
-    kickoff_display = st.empty()
-    kickoff_display.metric("Kickoff Found", "--:--")
+    if st.session_state.processed_clips:
+        st.success("🟢 Data Stabilized")
+    else:
+        st.info("⚪ Waiting for Input")
 
 # --- 5. INPUTS ---
 st.divider()
@@ -88,86 +86,76 @@ with col_left:
     video_file = st.file_uploader("2. Upload Match Video", type=['mp4', 'mov', 'avi'])
 
 with col_right:
-    st.info("⚙️ Stabilization Mode")
-    mode = st.radio("Choose Kickoff Detection Method:", ["Manual Entry", "AI Auto-Scan"])
-    
+    mode = st.radio("Kickoff Mode:", ["Manual Entry", "AI Auto-Scan"])
     if mode == "Manual Entry":
-        st.write("Set exact kickoff (e.g., 20:02):")
-        m_col, s_col = st.columns(2)
-        man_min = m_col.number_input("Minutes", 0, 120, 20)
-        man_sec = s_col.number_input("Seconds", 0, 59, 2)
-        manual_total_sec = (man_min * 60) + man_sec
+        m = st.number_input("Min", 0, 120, 20)
+        s = st.number_input("Sec", 0, 59, 2)
+        kickoff_input = (m * 60) + s
     else:
-        st.write("AI Search Window:")
-        search_window = st.slider("Window (Minutes)", 0, 60, (19, 22))
+        search_window = st.slider("AI Search Window", 0, 60, (19, 22))
 
-# --- 6. PROCESSING ENGINE ---
-if st.button("🚀 Start Stabilization & Cut"):
+# --- 6. PROCESSING ---
+if st.button("🚀 Start Clipping"):
     if report_text and video_file:
-        session_id = str(int(time.time()))
-        workspace = f"work_{session_id}"
+        workspace = "temp_clips"
         os.makedirs(workspace, exist_ok=True)
-
-        stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Match Data...")
-        events = parse_report(report_text)
         
-        if not events:
-            st.error("No valid timestamps found.")
-        else:
-            temp_source = os.path.join(workspace, "source.mp4")
-            with open(temp_source, "wb") as f:
-                f.write(video_file.getbuffer())
+        temp_source = os.path.join(workspace, "source.mp4")
+        with open(temp_source, "wb") as f:
+            f.write(video_file.getbuffer())
+        
+        kickoff = kickoff_input if mode == "Manual Entry" else detect_kickoff_ai(temp_source, search_window[0], search_window[1])
+        st.session_state.kickoff_time = kickoff
+        
+        if kickoff > 0:
+            events = parse_report(report_text)
+            st.session_state.processed_clips = [] # Reset for new run
             
-            if mode == "Manual Entry":
-                kickoff_sec = manual_total_sec
-                stabilization_placeholder.success("🟢 Phase 2: Manual Stabilization Active")
-                sync_score.metric("Sync Accuracy", "100% (Manual)")
-            else:
-                stabilization_placeholder.warning("🟡 Phase 2: AI Scanning...")
-                kickoff_sec = detect_kickoff_ai(temp_source, search_window[0], search_window[1])
-                if kickoff_sec > 0:
-                    stabilization_placeholder.success("🟢 Phase 2: AI Stabilized")
-                    sync_score.metric("Sync Accuracy", "98% (AI)")
+            for i, (match_min, action) in enumerate(events):
+                target_sec = kickoff + get_seconds(match_min)
+                label = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
+                out_path = f"{workspace}/{label}_{i}_{int(time.time())}.mp4"
                 
-            if kickoff_sec > 0:
-                m, s = divmod(int(kickoff_sec), 60)
-                kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
-                
-                st.success(f"Cutting {len(events)} individual clips...")
-                
-                for i, (match_min, action) in enumerate(events):
-                    # TIMING CALCULATION: Absolutes prevent drift
-                    target_sec = kickoff_sec + get_seconds(match_min)
+                with st.status(f"Cutting {match_min}: {label}"):
+                    # LOAD FRESH: Essential for timing accuracy
+                    video = VideoFileClip(temp_source)
+                    start, end = max(0, target_sec - 10), min(video.duration, target_sec + 5)
                     
-                    label = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
-                    out_path = os.path.join(workspace, f"{label}_{match_min.replace('+', '_')}_{i}.mp4")
+                    # MoviePy 2.x Compatibility Logic
+                    try:
+                        clip = video.section((start, end))
+                    except:
+                        try:
+                            clip = video.sub_clip(start, end)
+                        except:
+                            clip = video.subclip(start, end)
                     
-                    with st.status(f"Cutting {match_min}: {label}"):
-                        # FIX: Fresh load inside the loop resets the timer
-                        video = VideoFileClip(temp_source)
-                        start = max(0, target_sec - 10)
-                        end = min(video.duration, target_sec + 5)
-                        
-                        # FIX: MoviePy 2.x bracket slicing for precision
-                        clip = video[start:end]
-                        
-                        clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
-                        
-                        # Memory cleanup
-                        clip.close()
-                        video.close()
-                        del clip, video
-                        gc.collect() 
-                        time.sleep(0.1) 
+                    clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
+                    
+                    st.session_state.processed_clips.append({
+                        "name": f"{match_min} - {label}",
+                        "path": out_path,
+                        "file": f"{label}_{match_min}.mp4"
+                    })
+                    
+                    clip.close()
+                    video.close()
+                    gc.collect()
+            
+            st.rerun()
 
-                    with open(out_path, "rb") as f:
-                        st.download_button(
-                            label=f"Download {match_min} - {label}",
-                            data=f,
-                            file_name=f"{label}_{match_min}.mp4",
-                            key=f"dl_{session_id}_{i}"
-                        )
-            else:
-                stabilization_placeholder.error("🔴 Kickoff Not Detected")
-    else:
-        st.error("Missing inputs.")
+# --- 7. PERSISTENT DOWNLOAD AREA ---
+if st.session_state.processed_clips:
+    st.divider()
+    st.subheader("📥 Download Your Highlights")
+    cols = st.columns(3)
+    for idx, clip in enumerate(st.session_state.processed_clips):
+        with cols[idx % 3]:
+            if os.path.exists(clip["path"]):
+                with open(clip["path"], "rb") as f:
+                    st.download_button(
+                        label=f"Download {clip['name']}",
+                        data=f,
+                        file_name=clip["file"],
+                        key=f"dl_{idx}"
+                    )
