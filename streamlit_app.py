@@ -23,6 +23,7 @@ if 'workspace' not in st.session_state:
 
 # --- 3. UTILITIES ---
 def parse_report(text):
+    # Extracts timestamps (e.g., 12') and description text
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
@@ -77,10 +78,11 @@ with col1:
     else:
         st.info("⚪ Waiting for Input")
 with col2:
-    sync_score = st.empty()
-    sync_score.metric("Sync Accuracy", "100%" if st.session_state.clips else "0%")
+    st.metric("Sync Accuracy", "100%" if st.session_state.clips else "0%")
+with col3:
+    st.metric("Status", "Ready" if not st.session_state.clips else "Clips Generated")
 
-# --- 5. INPUTS ---
+# --- 5. INPUTS & FILTERS ---
 st.divider()
 col_left, col_right = st.columns(2)
 
@@ -89,6 +91,15 @@ with col_left:
     video_file = st.file_uploader("2. Upload Match Video", type=['mp4', 'mov', 'avi'])
 
 with col_right:
+    # --- NEW SELECTION FILTER ---
+    st.info("🎯 Event Selection Filter")
+    event_filter = st.multiselect(
+        "Select events to clip:",
+        options=["Goals", "Fouls", "Other Action"],
+        default=["Goals", "Fouls"]
+    )
+    
+    st.divider()
     mode = st.radio("Kickoff Mode:", ["Manual Entry", "AI Auto-Scan"])
     if mode == "Manual Entry":
         m = st.number_input("Kickoff Minute", 0, 120, 20)
@@ -99,7 +110,7 @@ with col_right:
 
 # --- 6. PROCESSING ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
-    if report_text and video_file:
+    if report_text and video_file and event_filter:
         os.makedirs(st.session_state.workspace, exist_ok=True)
         temp_source = os.path.join(st.session_state.workspace, "source.mp4")
         
@@ -110,21 +121,30 @@ if st.button("🚀 Start Stabilization & Cut"):
         
         if kickoff_sec > 0:
             events = parse_report(report_text)
-            st.session_state.clips = [] # Clear old results
+            st.session_state.clips = [] 
             
             for i, (match_min, action) in enumerate(events):
+                # Apply Selection Filter
+                action_lower = action.lower()
+                is_goal = "goal" in action_lower
+                is_foul = "foul" in action_lower
+                
+                label = "GOAL" if is_goal else "FOUL" if is_foul else "ACTION"
+                
+                # Check if user wants this category
+                if is_goal and "Goals" not in event_filter: continue
+                if is_foul and "Fouls" not in event_filter: continue
+                if not is_goal and not is_foul and "Other Action" not in event_filter: continue
+
                 target_sec = kickoff_sec + get_seconds(match_min)
-                label = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
                 out_filename = f"{label}_{match_min.replace('+', '_')}_{i}.mp4"
                 out_path = os.path.join(st.session_state.workspace, out_filename)
                 
                 with st.status(f"Cutting {match_min}: {label}"):
-                    # FRESH LOAD: Crucial for timing accuracy
                     video = VideoFileClip(temp_source)
-                    start = max(0, target_sec - 10)
-                    end = min(video.duration, target_sec + 5)
+                    start, end = max(0, target_sec - 10), min(video.duration, target_sec + 5)
                     
-                    # MOVIEPY 2.X SLICING: uses bracket notation
+                    # MoviePy 2.x Slicing Fix
                     clip = video[start:end]
                     
                     clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
@@ -139,11 +159,15 @@ if st.button("🚀 Start Stabilization & Cut"):
                     video.close()
                     gc.collect()
             st.rerun()
+    elif not event_filter:
+        st.error("Please select at least one event type in the filter.")
+    else:
+        st.error("Missing inputs.")
 
 # --- 7. PERSISTENT DOWNLOADS ---
 if st.session_state.clips:
     st.divider()
-    st.subheader("📥 Download Highlights")
+    st.subheader("📥 Download Filtered Highlights")
     cols = st.columns(3)
     for idx, clip_data in enumerate(st.session_state.clips):
         with cols[idx % 3]:
