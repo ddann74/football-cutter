@@ -10,14 +10,13 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 
 # --- 1. DATA EXTRACTION LOGIC ---
 def parse_report(text):
-    """Searches for timestamps like 12' or 45:10."""
+    """Extracts timestamps (e.g., 12' or 45:10) and event descriptions."""
     pattern = r"(\d{1,2}\+?\d?[':])\s*(.*)"
     return re.findall(pattern, text)
 
 def scrape_report_from_url(url):
-    """Fetches text content from a match report URL."""
+    """Fetches text content from a sports news URL."""
     try:
-        # We add a User-Agent to prevent websites from blocking the scraper
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -28,27 +27,26 @@ def scrape_report_from_url(url):
 
 def get_seconds(time_str):
     """Converts match clock string to total seconds."""
-    time_str = time_str.replace("'", "")
-    if ":" in time_str:
-        m, s = map(int, time_str.split(":"))
-        return m * 60 + s
-    return int(time_str) * 60
+    time_str = time_str.replace("'", "").replace(":", "")
+    try:
+        return int(time_str) * 60
+    except:
+        return 0
 
-# --- 2. AI KICKOFF DETECTION LOGIC ---
+# --- 2. AI KICKOFF DETECTION ---
 def detect_kickoff_visual(video_path):
     """AI logic scanning for the green pitch to find the kickoff time."""
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0: fps = 25 # Fallback
+    if fps == 0: fps = 25 
     
     frame_count = 0
     found_time = 0
     scan_progress = st.progress(0)
     
-    # Optimized scan: Look at one frame every 2 seconds to speed up 200MB+ files
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret or frame_count > fps * 300: # Limit scan to first 5 minutes
+        if not ret or frame_count > fps * 300: 
             break
             
         if frame_count % int(fps * 2) == 0:
@@ -74,7 +72,7 @@ def detect_kickoff_visual(video_path):
 
 # --- 3. UI SETUP ---
 st.set_page_config(page_title="Football Highlight Cutter", page_icon="⚽", layout="wide")
-st.title("⚽ Football Highlight Cutter (High Capacity)")
+st.title("⚽ Football Highlight Cutter")
 
 # --- 4. DATA STABILIZATION INDICATORS ---
 st.divider()
@@ -100,62 +98,56 @@ input_mode = st.radio("Choose Source:", ["Paste Text", "Use URL"])
 
 report_content = ""
 if input_mode == "Paste Text":
-    report_content = st.text_area("1. Match Report", height=150, placeholder="12' Goal...")
+    report_content = st.text_area("1. Match Report", height=150)
 else:
     report_url = st.text_input("1. Match Report URL")
     if report_url:
-        with st.spinner("Scraping report..."):
-            report_content = scrape_report_from_url(report_url)
+        report_content = scrape_report_from_url(report_url)
 
-video_file = st.file_uploader("2. Upload Match Video (Up to 2GB)", type=['mp4', 'mov', 'avi'])
+video_file = st.file_uploader("2. Upload Match Video", type=['mp4', 'mov', 'avi'])
 
+# --- 6. PROCESSING ---
 if st.button("🚀 Start AI Sync & Cut"):
     if report_content and video_file:
-        # Phase 1: Text
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Data...")
         events = parse_report(report_content)
         
         if not events:
-            st.error("No timestamps found. Ensure the report has formats like 12' or 45:00.")
+            st.error("No timestamps found.")
         else:
-            # Phase 2: Video
             stabilization_placeholder.warning("🟡 Phase 2: Detecting Kickoff...")
-            temp_path = "temp_large_video.mp4"
+            temp_path = "temp_video.mp4"
             with open(temp_path, "wb") as f:
-                f.write(video_file.getbuffer()) # Better for large files
+                f.write(video_file.getbuffer()) 
             
             kickoff_sec = detect_kickoff_visual(temp_path)
             
             if kickoff_sec > 0:
-                # Phase 3: Final Sync
                 stabilization_placeholder.success("🟢 Phase 3: Fully Stabilized")
                 sync_score.metric("Sync Accuracy", "99%")
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Found", f"{m:02d}:{s:02d}")
                 
-                # Phase 4: Cutting
                 video = VideoFileClip(temp_path)
-                st.write(f"### 🎬 Generated Clips ({len(events)})")
                 
                 for i, (match_min, action) in enumerate(events):
                     event_sec = kickoff_sec + get_seconds(match_min)
-                    
-                    # Logic: 10s before event, 5s after
                     start_t = max(0, event_sec - 10)
                     end_t = min(video.duration, event_sec + 5)
                     
-                    out_name = f"highlight_{match_min.replace(\"'\", \"\")}_{i}.mp4"
+                    # CLEANED FILENAME LOGIC (Fixed the SyntaxError)
+                    clean_min = match_min.replace("'", "").replace(":", "")
+                    out_name = f"clip_{clean_min}_{i}.mp4"
                     
-                    with st.status(f"Cutting highlight: {match_min} {action}..."):
+                    with st.status(f"Cutting: {match_min}..."):
                         clip = video.subclip(start_t, end_t)
-                        clip.write_videofile(out_name, codec="libx264", audio_codec="aac", temp_audiofile='temp-audio.m4a', remove_temp=True)
+                        clip.write_videofile(out_name, codec="libx264", audio_codec="aac")
                     
                     with open(out_name, "rb") as f:
-                        st.download_button(f"Download: {match_min} {action}", f, file_name=out_name)
+                        st.download_button(f"Download {match_min}", f, file_name=out_name)
                 
                 video.close()
-                st.balloons()
             else:
-                stabilization_placeholder.error("🔴 Stabilization Failed: Kickoff not found visually.")
+                stabilization_placeholder.error("🔴 Kickoff Not Found")
     else:
-        st.error("Missing input data.")
+        st.error("Missing inputs.")
