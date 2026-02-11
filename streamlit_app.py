@@ -4,6 +4,7 @@ import numpy as np
 import re
 import os
 import time
+import gc
 
 # --- 1. VERSION-SAFE MOVIEPY IMPORT ---
 try:
@@ -109,7 +110,7 @@ if st.button("🚀 Start Stabilization & Cut"):
         if not events:
             st.error("No valid timestamps found.")
         else:
-            temp_path = "temp_match_video.mp4"
+            temp_path = "match_source.mp4"
             with open(temp_path, "wb") as f:
                 f.write(video_file.getbuffer())
             
@@ -129,49 +130,48 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
-                st.success(f"Processing {len(events)} highlights...")
+                st.success(f"Cutting {len(events)} highlights. Please wait...")
                 
                 for i, (match_min, action) in enumerate(events):
+                    # Force a fresh time offset for every loop
                     event_sec = kickoff_sec + get_seconds(match_min)
                     
-                    # UNIQUE FILENAME: Prevents the browser from serving a cached version
-                    unique_id = int(time.time())
-                    out_name = f"clip_{unique_id}_{i}.mp4"
+                    # Generate a unique physical filename to bypass OS caching
+                    unique_id = int(time.time()) + i
+                    out_name = f"highlight_{unique_id}.mp4"
                     
-                    with st.status(f"Cutting: {match_min} {action[:15]}..."):
-                        # RE-LOAD: Ensures a fresh instance for every single highlight
+                    with st.status(f"Processing Clip {i+1}: {match_min}..."):
+                        # RE-INITIALIZE EVERYTHING INSIDE THE LOOP
                         video = VideoFileClip(temp_path)
                         start_t = max(0, event_sec - 10)
                         end_t = min(video.duration, event_sec + 5)
                         
-                        try:
-                            # --- MOVIEPY 2.X SECURE TRIM ---
-                            # Check for modern sub_clip (v2.x) first
-                            if hasattr(video, 'sub_clip'):
-                                clip = video.sub_clip(start_t, end_t)
-                            elif hasattr(video, 'subclip'):
-                                clip = video.subclip(start_t, end_t)
-                            else:
-                                # Final slicing fallback
-                                clip = video.with_start(start_t).with_end(end_t).with_duration(end_t - start_t)
-                            
-                            clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
-                            
-                            # CLEANUP: Unlocks the file so the next loop can run safely
-                            clip.close()
-                            video.close()
-                        except Exception as e:
-                            st.error(f"Error at {match_min}: {e}")
+                        # --- USE THE V2.X SLICING METHOD ---
+                        if hasattr(video, 'sub_clip'):
+                            clip = video.sub_clip(start_t, end_t)
+                        else:
+                            # Direct time assignment
+                            clip = video.with_start(start_t).with_end(end_t).with_duration(end_t - start_t)
+                        
+                        # Write to the unique filename
+                        clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
+                        
+                        # HARD RESET OF OBJECTS
+                        clip.close()
+                        video.close()
+                        del clip
+                        del video
+                        gc.collect() # Force garbage collection
                     
-                    # DOWNLOAD: Unique keys to prevent Streamlit session conflicts
+                    # Create the download button with a unique key
                     with open(out_name, "rb") as f:
                         st.download_button(
                             label=f"Download {match_min} - {action[:15]}",
                             data=f,
-                            file_name=f"highlight_{match_min.replace('+', '_')}.mp4",
-                            key=f"dl_{unique_id}_{i}"
+                            file_name=f"match_min_{match_min.replace('+', '_')}.mp4",
+                            key=f"btn_{unique_id}"
                         )
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
     else:
-        st.error("Missing Match Report or Video File.")
+        st.error("Please provide both the report and the video file.")
