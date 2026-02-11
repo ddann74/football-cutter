@@ -8,7 +8,7 @@ import time
 # Robust MoviePy import for version 1.x and 2.x compatibility
 try:
     from moviepy import VideoFileClip
-except:
+except ImportError:
     try:
         from moviepy.editor import VideoFileClip
     except ImportError:
@@ -95,7 +95,7 @@ with col_right:
     mode = st.radio("Choose Kickoff Detection Method:", ["Manual Entry", "AI Auto-Scan"])
     
     if mode == "Manual Entry":
-        st.write("Enter the exact time the match begins in the video:")
+        st.write("Set kickoff time (e.g., 20:02):")
         m_col, s_col = st.columns(2)
         man_min = m_col.number_input("Minutes", 0, 120, 20)
         man_sec = s_col.number_input("Seconds", 0, 59, 2)
@@ -143,12 +143,14 @@ if st.button("🚀 Start Stabilization & Cut"):
                         start_t = max(0, event_sec - 10)
                         end_t = min(video.duration, event_sec + 5)
                         
-                        # Version-safe MoviePy clipping
+                        # --- FIX: VERSION AGNOSTIC CLIP METHOD ---
+                        # Checks for sub_clip (MoviePy 2.0+) then falls back to subclip (1.0)
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start_t, end_t)
                         else:
                             clip = video.subclip(start_t, end_t)
-                            
+                        # -----------------------------------------
+                        
                         clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
                     
                     st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}.mp4")
