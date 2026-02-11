@@ -5,7 +5,7 @@ import re
 import os
 import time
 
-# Robust MoviePy import for version 1.x and 2.x compatibility
+# Robust MoviePy import
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -95,7 +95,7 @@ with col_right:
     mode = st.radio("Choose Kickoff Detection Method:", ["Manual Entry", "AI Auto-Scan"])
     
     if mode == "Manual Entry":
-        st.write("Set kickoff time (your 20:00 - 20:04 window):")
+        st.write("Set kickoff time (e.g., 20:02):")
         m_col, s_col = st.columns(2)
         man_min = m_col.number_input("Minutes", 0, 120, 20)
         man_sec = s_col.number_input("Seconds", 0, 59, 2)
@@ -132,29 +132,33 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
-                # Processing video
+                # Load video
                 video = VideoFileClip(temp_path)
                 st.success(f"Processing {len(events)} highlights...")
                 
-                for i, (match_min, action) in enumerate(events):
-                    event_sec = kickoff_sec + get_seconds(match_min)
-                    out_name = f"highlight_{i}.mp4"
-                    
-                    with st.status(f"Cutting: {match_min} {action[:15]}..."):
-                        start_t = max(0, event_sec - 10)
-                        end_t = min(video.duration, event_sec + 5)
+                # Identify the correct trimming method once
+                trim_func = None
+                if hasattr(video, "sub_clip"): # MoviePy 2.0+
+                    trim_func = video.sub_clip
+                elif hasattr(video, "subclip"): # MoviePy 1.0
+                    trim_func = video.subclip
+                
+                if trim_func is None:
+                    st.error("Could not find a valid MoviePy trimming method.")
+                else:
+                    for i, (match_min, action) in enumerate(events):
+                        event_sec = kickoff_sec + get_seconds(match_min)
+                        out_name = f"highlight_{i}.mp4"
                         
-                        # --- VERSION-AGNOSTIC TRIMMING ---
-                        # In MoviePy 2.x, subclip was renamed to sub_clip
-                        if hasattr(video, 'sub_clip'):
-                            clip = video.sub_clip(start_t, end_t)
-                        else:
-                            # Fallback for older MoviePy 1.x
-                            clip = getattr(video, 'subclip')(start_t, end_t)
+                        with st.status(f"Cutting: {match_min} {action[:15]}..."):
+                            start_t = max(0, event_sec - 10)
+                            end_t = min(video.duration, event_sec + 5)
+                            
+                            # Execute the detected function
+                            clip = trim_func(start_t, end_t)
+                            clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
                         
-                        clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
-                    
-                    st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}.mp4")
+                        st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}.mp4")
                 video.close()
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
