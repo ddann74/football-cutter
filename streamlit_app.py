@@ -63,7 +63,7 @@ def detect_kickoff_ai(video_path, start_min, end_min):
     cap.release()
     return 0
 
-# --- 4. UI SETUP ---
+# --- 4. UI SETUP & STATUS ---
 st.set_page_config(page_title="Football Cutter Pro", page_icon="⚽", layout="wide")
 st.title("⚽ AI Football Highlight Cutter")
 
@@ -79,7 +79,7 @@ with col1:
 with col2:
     st.metric("Sync Accuracy", "100%" if st.session_state.clips else "0%")
 with col3:
-    st.metric("Highlights Ready", len(st.session_state.clips))
+    st.metric("Highlights Generated", len(st.session_state.clips))
 
 # --- 5. INPUTS & FILTERS ---
 st.divider()
@@ -98,10 +98,10 @@ with col_right:
     )
     
     st.divider()
-    mode = st.radio("Kickoff Detection:", ["Manual Entry", "AI Auto-Scan"])
+    mode = st.radio("Kickoff Mode:", ["Manual Entry", "AI Auto-Scan"])
     if mode == "Manual Entry":
-        m = st.number_input("Kickoff Minute", 0, 120, 20)
-        s = st.number_input("Kickoff Second", 0, 59, 0)
+        m = st.number_input("Minute", 0, 120, 20)
+        s = st.number_input("Second", 0, 59, 0)
         kickoff_val = (m * 60) + s
     else:
         search_window = st.slider("AI Window (Min)", 0, 60, (19, 22))
@@ -126,6 +126,7 @@ if st.button("🚀 Start Stabilization & Cut"):
                 is_goal = "goal" in act_lower
                 is_foul = "foul" in act_lower
                 
+                # Apply selection filters
                 if is_goal and "Goals" not in event_filter: continue
                 if is_foul and "Fouls" not in event_filter: continue
                 if not is_goal and not is_foul and "Other Action" not in event_filter: continue
@@ -135,11 +136,13 @@ if st.button("🚀 Start Stabilization & Cut"):
                 out_filename = f"{label}_{match_min.replace('+', '_')}_{i}.mp4"
                 out_path = os.path.join(st.session_state.workspace, out_filename)
                 
-                with st.status(f"Processing {match_min}: {label}..."):
+                with st.status(f"Cutting {match_min}: {label}..."):
+                    # RE-INITIALIZE VIDEO: Fixes timing drift and MoviePy session issues
                     video = VideoFileClip(temp_source)
                     start, end = max(0, target_sec - 10), min(video.duration, target_sec + 5)
                     
-                    # --- CRITICAL FIX: MOVIEPY 2.X BRACKET SLICING ---
+                    # --- CRITICAL FIX: MOVIEPY 2.X BRACKET NOTATION ---
+                    # The .subclip() method is deprecated in v2.x
                     clip = video[start:end]
                     
                     clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
@@ -150,25 +153,28 @@ if st.button("🚀 Start Stabilization & Cut"):
                         "file_name": out_filename
                     })
                     
+                    # CLEAR MEMORY: Prevents the app from freezing during large renders
                     clip.close()
                     video.close()
                     gc.collect() 
             st.rerun()
+    elif not event_filter:
+        st.error("Please select at least one event type (Goals or Fouls).")
     else:
-        st.error("Please ensure report, video, and filters are all set.")
+        st.error("Please upload a video and match report.")
 
-# --- 7. PERSISTENT DOWNLOADS ---
+# --- 7. DOWNLOAD DASHBOARD ---
 if st.session_state.clips:
     st.divider()
-    st.subheader("📥 Download Highlights")
+    st.subheader("📥 Download Your Highlights")
     cols = st.columns(3)
-    for idx, clip_data in enumerate(st.session_state.clips):
+    for idx, clip in enumerate(st.session_state.clips):
         with cols[idx % 3]:
-            if os.path.exists(clip_data["path"]):
-                with open(clip_data["path"], "rb") as f:
+            if os.path.exists(clip["path"]):
+                with open(clip["path"], "rb") as f:
                     st.download_button(
-                        label=f"Download {clip_data['label']}",
+                        label=f"Download {clip['label']}",
                         data=f,
-                        file_name=clip_data["file_name"],
+                        file_name=clip['file_name'],
                         key=f"dl_{idx}"
                     )
