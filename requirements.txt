@@ -2,3 +2,5 @@ streamlit
 opencv-python-headless
 numpy
 moviepy>=2.0.0
+requests
+beautifulsoup4
