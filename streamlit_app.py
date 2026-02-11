@@ -8,38 +8,11 @@ import time
 import os
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
-# --- 1. ENHANCED DATA EXTRACTION ---
+# --- 1. DATA EXTRACTION ---
 def parse_report(text):
-    """
-    Super-flexible regex to find timestamps:
-    Matches: 12', 12:00, 12 min, 12th min, (12'), [12]
-    """
-    # This pattern looks for numbers associated with time markers
+    """Flexible regex to find timestamps: 12', 12:00, 12 min, etc."""
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
-    found = re.findall(pattern, text, re.IGNORECASE)
-    
-    # Secondary check: Just look for standalone numbers at the start of lines
-    if not found:
-        secondary_pattern = r"^\s*(\d{1,2})\s+([A-Z].*)"
-        found = re.findall(secondary_pattern, text, re.MULTILINE)
-        
-    return found
-
-def scrape_report_from_url(url):
-    """Fetches text content and bypasses common blocks."""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Focus on article or body text to avoid menu links
-        for element in soup(["script", "style", "nav", "footer", "header"]):
-            element.decompose()
-            
-        return soup.get_text(separator=' ', strip=True)
-    except Exception as e:
-        st.error(f"Scraper Error: {e}")
-        return ""
+    return re.findall(pattern, text, re.IGNORECASE)
 
 def get_seconds(time_str):
     """Converts match clock strings to seconds."""
@@ -56,32 +29,53 @@ def get_seconds(time_str):
         except:
             return 0
 
-# --- 2. AI KICKOFF DETECTION ---
+# --- 2. IMPROVED AI KICKOFF DETECTION ---
 def detect_kickoff_visual(video_path):
+    """
+    Scans the first 10 minutes for the green pitch.
+    """
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    
+    # Scan up to 10 minutes (600 seconds)
+    max_scan_seconds = 600 
     frame_count = 0
     
     scan_progress = st.progress(0)
+    st.write("🔍 Scanning video for the pitch...")
+
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret or frame_count > fps * 300: break
+        if not ret or frame_count > fps * max_scan_seconds: 
+            break
             
-        if frame_count % int(fps * 2) == 0:
+        # Check one frame every 1.5 seconds for speed
+        if frame_count % int(fps * 1.5) == 0:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            mask = cv2.inRange(hsv, np.array([35, 40, 40]), np.array([85, 255, 255]))
-            ratio = np.sum(mask > 0) / (frame.shape[0] * frame.shape[1])
-            scan_progress.progress(min(int((frame_count/(fps*300))*100), 100))
-            if ratio > 0.65:
+            # Broad green range for different pitches
+            lower_green = np.array([30, 30, 30])
+            upper_green = np.array([90, 255, 255])
+            mask = cv2.inRange(hsv, lower_green, upper_green)
+            
+            green_ratio = np.sum(mask > 0) / (frame.shape[0] * frame.shape[1])
+            
+            # Update progress bar
+            progress_val = min(int((frame_count / (fps * max_scan_seconds)) * 100), 100)
+            scan_progress.progress(progress_val)
+
+            # If 55% of the screen is green, we found the pitch
+            if green_ratio > 0.55:
                 cap.release()
                 scan_progress.empty()
                 return frame_count / fps
+                
         frame_count += 1
+    
     cap.release()
     scan_progress.empty()
     return 0
 
-# --- 3. UI ---
+# --- 3. UI SETUP ---
 st.set_page_config(page_title="Football Cutter", page_icon="⚽", layout="wide")
 st.title("⚽ Football Highlight Cutter")
 
@@ -102,31 +96,22 @@ with col3:
 
 # --- 5. INPUTS ---
 st.divider()
-input_mode = st.radio("Source:", ["Paste Text", "Use URL"])
-report_content = ""
-
-if input_mode == "Paste Text":
-    report_content = st.text_area("1. Paste Report", height=150, placeholder="12' Goal - Messi\n45' Yellow Card")
-else:
-    report_url = st.text_input("1. URL")
-    if report_url:
-        report_content = scrape_report_from_url(report_url)
-
-video_file = st.file_uploader("2. Video (Up to 2GB)", type=['mp4', 'mov', 'avi'])
+report_text = st.text_area("1. Paste Match Report", height=150, placeholder="Example: 12' Goal - Messi")
+video_file = st.file_uploader("2. Upload Match Video", type=['mp4', 'mov', 'avi'])
 
 # --- 6. EXECUTION ---
 if st.button("🚀 Start AI Sync & Cut"):
-    if report_content and video_file:
+    if report_text and video_file:
+        # Phase 1: Text Stabilization
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Data...")
-        events = parse_report(report_content)
+        events = parse_report(report_text)
         
         if not events:
-            st.error("❌ No Timestamps Found.")
-            with st.expander("🔍 Debug: See what the AI 'sees' in your text"):
-                st.write(report_content)
+            st.error("No timestamps found in the text.")
         else:
+            # Phase 2: Video Stabilization
             stabilization_placeholder.warning("🟡 Phase 2: Detecting Kickoff...")
-            temp_path = "temp_vid.mp4"
+            temp_path = "temp_match_video.mp4"
             with open(temp_path, "wb") as f:
                 f.write(video_file.getbuffer())
             
@@ -138,14 +123,25 @@ if st.button("🚀 Start AI Sync & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Found", f"{m:02d}:{s:02d}")
                 
+                # Phase 4: Cutting
                 video = VideoFileClip(temp_path)
+                st.success(f"Found {len(events)} events. Processing clips...")
+                
                 for i, (match_min, action) in enumerate(events):
                     event_sec = kickoff_sec + get_seconds(match_min)
-                    # Clip: 10s before to 5s after
-                    clip = video.subclip(max(0, event_sec-10), min(video.duration, event_sec+5))
-                    out_name = f"highlight_{i}.mp4"
-                    clip.write_videofile(out_name, codec="libx264", audio_codec="aac")
-                    st.download_button(f"Download {match_min} {action[:20]}", open(out_name, "rb"), file_name=out_name)
+                    start_t = max(0, event_sec - 10)
+                    end_t = min(video.duration, event_sec + 5)
+                    
+                    out_name = f"clip_{i}.mp4"
+                    with st.status(f"Cutting: {match_min} {action[:20]}..."):
+                        clip = video.subclip(start_t, end_t)
+                        clip.write_videofile(out_name, codec="libx264", audio_codec="aac")
+                    
+                    st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}_highlight.mp4")
+                
                 video.close()
             else:
-                st.error("Could not find the start of the match in the video.")
+                stabilization_placeholder.error("🔴 Kickoff Not Detected (No Green Pitch Found)")
+                st.info("Tip: Does your video start with commercials? Try a version that starts closer to the match.")
+    else:
+        st.error("Please provide both report text and a video file.")
