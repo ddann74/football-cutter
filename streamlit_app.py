@@ -6,7 +6,7 @@ import os
 import time
 import gc
 
-# --- 1. MOVIEPY 2.X COMPATIBLE IMPORT ---
+# --- 1. MOVIEPY 2.X VERSION-SAFE IMPORT ---
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -17,6 +17,7 @@ except ImportError:
 
 # --- 2. DATA EXTRACTION & CLASSIFICATION ---
 def parse_report(text):
+    # Extracts timestamps (e.g., 12') and description text
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
@@ -117,7 +118,6 @@ if st.button("🚀 Start Stabilization & Cut"):
             with open(temp_source, "wb") as f:
                 f.write(video_file.getbuffer())
             
-            # Kickoff Sync
             if mode == "Manual Entry":
                 kickoff_sec = manual_total_sec
                 stabilization_placeholder.success("🟢 Phase 2: Manual Stabilization Active")
@@ -133,37 +133,37 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
-                st.success(f"Cutting {len(events)} clips...")
+                st.success(f"Cutting {len(events)} individual clips...")
                 
                 for i, (match_min, action) in enumerate(events):
                     target_sec = kickoff_sec + get_seconds(match_min)
-                    
-                    # Classification (Goal/Foul)
                     label = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
                     out_path = os.path.join(workspace, f"{label}_{i}.mp4")
                     
-                    with st.status(f"Processing {match_min}: {label}"):
+                    with st.status(f"Cutting {match_min}: {label}"):
                         video = VideoFileClip(temp_source)
                         start = max(0, target_sec - 10)
                         end = min(video.duration, target_sec + 5)
                         
-                        # MOVIEPY 2.X VERSION FIX:
-                        # Attempt to use the new method name 'sub_clip', then fallback
+                        # --- UNIVERSAL MOVIEPY 2.X TRIMMING FALLBACK ---
+                        clip = None
                         try:
-                            if hasattr(video, 'sub_clip'):
+                            # Strategy A: with_section (Standard MoviePy 2.x)
+                            clip = video.with_section((start, end))
+                        except:
+                            try:
+                                # Strategy B: sub_clip (Some 2.x releases)
                                 clip = video.sub_clip(start, end)
-                            else:
+                            except:
+                                # Strategy C: subclip (Legacy 1.x)
                                 clip = video.subclip(start, end)
-                        except Exception:
-                            # Final fallback for v2.x slicing syntax
-                            clip = video.sliced(start, end)
                         
-                        clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
+                        if clip:
+                            clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
+                            clip.close()
                         
-                        clip.close()
                         video.close()
-                        del clip
-                        del video
+                        del clip, video
                         gc.collect() 
                         time.sleep(0.1) 
 
@@ -177,4 +177,4 @@ if st.button("🚀 Start Stabilization & Cut"):
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
     else:
-        st.error("Please provide both report and video.")
+        st.error("Missing inputs.")
