@@ -79,7 +79,7 @@ with col1:
 with col2:
     st.metric("Sync Accuracy", "100%" if st.session_state.clips else "0%")
 with col3:
-    st.metric("Clips Found", len(st.session_state.clips))
+    st.metric("Highlights Generated", len(st.session_state.clips))
 
 # --- 5. INPUTS & FILTERS ---
 st.divider()
@@ -90,22 +90,21 @@ with col_left:
     video_file = st.file_uploader("2. Upload Match Video", type=['mp4', 'mov', 'avi'])
 
 with col_right:
-    # Event Selection Filter
-    st.info("🎯 Event Selection Filter")
+    st.info("🎯 Highlight Selection Filter")
     event_filter = st.multiselect(
-        "Select events to clip:",
+        "Only process these events:",
         options=["Goals", "Fouls", "Other Action"],
         default=["Goals", "Fouls"]
     )
     
     st.divider()
-    mode = st.radio("Kickoff Mode:", ["Manual Entry", "AI Auto-Scan"])
+    mode = st.radio("Kickoff Detection Mode:", ["Manual Entry", "AI Auto-Scan"])
     if mode == "Manual Entry":
-        m = st.number_input("Kickoff Minute", 0, 120, 20)
-        s = st.number_input("Kickoff Second", 0, 59, 0)
+        m = st.number_input("Minute", 0, 120, 20)
+        s = st.number_input("Second", 0, 59, 0)
         kickoff_val = (m * 60) + s
     else:
-        search_window = st.slider("AI Search Window", 0, 60, (19, 22))
+        search_window = st.slider("AI Window (Min)", 0, 60, (19, 22))
 
 # --- 6. PROCESSING ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
@@ -123,10 +122,10 @@ if st.button("🚀 Start Stabilization & Cut"):
             st.session_state.clips = [] 
             
             for i, (match_min, action) in enumerate(events):
-                # Filter logic
-                action_lower = action.lower()
-                is_goal = "goal" in action_lower
-                is_foul = "foul" in action_lower
+                # Filter Logic
+                act_lower = action.lower()
+                is_goal = "goal" in act_lower
+                is_foul = "foul" in act_lower
                 
                 if is_goal and "Goals" not in event_filter: continue
                 if is_foul and "Fouls" not in event_filter: continue
@@ -138,11 +137,11 @@ if st.button("🚀 Start Stabilization & Cut"):
                 out_path = os.path.join(st.session_state.workspace, out_filename)
                 
                 with st.status(f"Cutting {match_min}: {label}"):
-                    # FRESH LOAD: Ensures timing accuracy
+                    # FRESH LOAD: Reset internal clock to fix timing mismatches
                     video = VideoFileClip(temp_source)
                     start, end = max(0, target_sec - 10), min(video.duration, target_sec + 5)
                     
-                    # MoviePy 2.x Bracket Slicing
+                    # FIXED: MoviePy 2.x bracket slicing notation
                     clip = video[start:end]
                     
                     clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
@@ -155,25 +154,25 @@ if st.button("🚀 Start Stabilization & Cut"):
                     
                     clip.close()
                     video.close()
-                    gc.collect()
+                    gc.collect() 
             st.rerun()
     elif not event_filter:
         st.error("Please select at least one event type in the filter.")
     else:
-        st.error("Missing video file or match report.")
+        st.error("Missing video or match report data.")
 
-# --- 7. PERSISTENT DOWNLOADS ---
+# --- 7. PERSISTENT DOWNLOAD AREA ---
 if st.session_state.clips:
     st.divider()
-    st.subheader("📥 Download Highlights")
+    st.subheader("📥 Download Stabilized Highlights")
     cols = st.columns(3)
-    for idx, clip_data in enumerate(st.session_state.clips):
+    for idx, clip in enumerate(st.session_state.clips):
         with cols[idx % 3]:
-            if os.path.exists(clip_data["path"]):
-                with open(clip_data["path"], "rb") as f:
+            if os.path.exists(clip["path"]):
+                with open(clip["path"], "rb") as f:
                     st.download_button(
-                        label=clip_data["label"],
+                        label=f"Download {clip['label']}",
                         data=f,
-                        file_name=clip_data["file_name"],
+                        file_name=clip['file_name'],
                         key=f"dl_{idx}"
                     )
