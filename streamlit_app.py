@@ -7,7 +7,6 @@ import time
 import gc
 
 # --- 1. MOVIEPY 2.X VERSION-SAFE IMPORT ---
-# Fixed the 'ModuleNotFoundError: No module named moviepy.editor' from logs
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -50,13 +49,12 @@ def detect_kickoff_ai(video_path, start_min, end_min):
     while cap.isOpened() and current_frame < end_frame:
         ret, frame = cap.read()
         if not ret: break
-        # Sample every half-second for speed
         if current_frame % int(fps * 0.5) == 0:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, np.array([35, 40, 40]), np.array([85, 255, 255]))
             green_ratio = np.sum(mask > 0) / (frame.shape[0] * frame.shape[1])
             scan_progress.progress(min(int(((current_frame - start_frame) / (end_frame - start_frame)) * 100), 100))
-            if green_ratio > 0.55: # Kickoff detected via pitch color
+            if green_ratio > 0.55:
                 cap.release()
                 return current_frame / fps
         current_frame += 1
@@ -106,9 +104,9 @@ with col_right:
 # --- 6. PROCESSING ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
     if report_text and video_file:
-        # Create unique workspace per run to avoid browser cache bugs
-        run_id = str(int(time.time()))
-        workspace = f"work_{run_id}"
+        # Unique session path to prevent browser cache from serving old video data
+        session_id = str(int(time.time()))
+        workspace = f"work_{session_id}"
         os.makedirs(workspace, exist_ok=True)
 
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Match Data...")
@@ -142,26 +140,26 @@ if st.button("🚀 Start Stabilization & Cut"):
                 for i, (match_min, action) in enumerate(events):
                     target_sec = kickoff_sec + get_seconds(match_min)
                     
-                    # ACTION CLASSIFICATION (GOAL OR FOUL)
+                    # ACTION IDENTIFICATION (GOAL OR FOUL)
                     label = "GOAL" if "goal" in action.lower() else "FOUL" if "foul" in action.lower() else "ACTION"
                     out_path = os.path.join(workspace, f"{label}_{i}.mp4")
                     
                     with st.status(f"Cutting {match_min}: {label}"):
-                        # Load fresh instance to prevent frame-leakage between clips
+                        # Load fresh instance inside loop to break internal cache
                         video = VideoFileClip(temp_source)
                         start = max(0, target_sec - 10)
                         end = min(video.duration, target_sec + 5)
                         
-                        # Correct MoviePy 2.x sub-clip logic
-                        # Replaces the broken 'subclip' attribute from logs [cite: 8083]
+                        # MoviePy 2.x absolute slicing fix
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start, end)
                         else:
+                            # Fallback to slice notation or subclip for legacy compatibility
                             clip = video.subclip(start, end)
                         
                         clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
                         
-                        # DEEP PURGE: Fixes duplicate video bug
+                        # FORCE DEEP PURGE: Unlocks the file so the next loop can cut accurately
                         clip.close()
                         video.close()
                         del clip
@@ -169,13 +167,13 @@ if st.button("🚀 Start Stabilization & Cut"):
                         gc.collect() 
                         time.sleep(0.1) 
 
-                    # Render Download Button
+                    # Render Download Button with unique session key
                     with open(out_path, "rb") as f:
                         st.download_button(
                             label=f"Download {match_min} - {label}",
                             data=f,
                             file_name=f"{label}_{match_min}.mp4",
-                            key=f"dl_{run_id}_{i}"
+                            key=f"dl_{session_id}_{i}"
                         )
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
