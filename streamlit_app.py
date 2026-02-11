@@ -4,16 +4,14 @@ import numpy as np
 import re
 import os
 
-# 1. Version-Safe MoviePy Import
+# 1. Version-Agnostic MoviePy Import
 try:
     from moviepy import VideoFileClip
-    import moviepy.video.fx as vfx
 except ImportError:
     try:
         from moviepy.editor import VideoFileClip
-        import moviepy.video.fx.all as vfx
     except ImportError:
-        st.error("MoviePy not found. Add 'moviepy' to requirements.txt")
+        st.error("MoviePy not found. Please add 'moviepy' to requirements.txt")
 
 # --- 2. DATA EXTRACTION ---
 def parse_report(text):
@@ -77,7 +75,7 @@ with col2:
     sync_score.metric("Sync Accuracy", "0%")
 with col3:
     kickoff_display = st.empty()
-    kickoff_display.metric("Kickoff Point", "--:--")
+    kickoff_display.metric("Kickoff Found", "--:--")
 
 # --- 6. INPUTS ---
 st.divider()
@@ -92,13 +90,13 @@ with col_right:
     mode = st.radio("Choose Kickoff Detection Method:", ["Manual Entry", "AI Auto-Scan"])
     
     if mode == "Manual Entry":
-        st.write("Set kickoff time (e.g., 20:02):")
+        st.write("Set exact kickoff (e.g., 20:02):")
         m_col, s_col = st.columns(2)
         man_min = m_col.number_input("Minutes", 0, 120, 20)
         man_sec = s_col.number_input("Seconds", 0, 59, 2)
         manual_total_sec = (man_min * 60) + man_sec
     else:
-        st.write("AI searches for pitch in this window:")
+        st.write("AI Search Window:")
         search_window = st.slider("Window (Minutes)", 0, 60, (19, 22))
 
 # --- 7. MAIN ENGINE ---
@@ -129,36 +127,42 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
-                video = VideoFileClip(temp_path)
                 st.success(f"Processing {len(events)} highlights...")
                 
+                # We open the video inside the loop to ensure a fresh pointer for every cut
                 for i, (match_min, action) in enumerate(events):
+                    # CALCULATE EXACT OFFSET
                     event_sec = kickoff_sec + get_seconds(match_min)
                     out_name = f"highlight_{i}.mp4"
                     
                     with st.status(f"Cutting: {match_min} {action[:15]}..."):
+                        # Open fresh instance
+                        video = VideoFileClip(temp_path)
                         start_t = max(0, event_sec - 10)
                         end_t = min(video.duration, event_sec + 5)
                         
-                        # --- THE ULTIMATE TRIMMING FALLBACK ---
-                        try:
-                            if hasattr(video, "sub_clip"):
-                                clip = video.sub_clip(start_t, end_t)
-                            elif hasattr(video, "subclip"):
-                                clip = video.subclip(start_t, end_t)
-                            elif hasattr(video, "with_section"):
-                                clip = video.with_section(start_t, end_t)
-                            else:
-                                # This uses the internal time-slicing logic directly
-                                # which is the base of all cutting in MoviePy
-                                clip = video.with_start(start_t).with_end(end_t).with_duration(end_t - start_t)
-                            
-                            clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
-                            st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}.mp4")
-                        except Exception as e:
-                            st.error(f"Cutting error at {match_min}: {e}")
-                video.close()
+                        # FORCE TRIMMING VIA SUB_CLIP (v2) OR SUBCLIP (v1)
+                        if hasattr(video, "sub_clip"):
+                            clip = video.sub_clip(start_t, end_t)
+                        else:
+                            clip = video.subclip(start_t, end_t)
+                        
+                        # WRITE FILE
+                        clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
+                        
+                        # CLOSE CLIP IMMEDIATELY TO FREE MEMORY
+                        clip.close()
+                        video.close()
+                    
+                    # RENDER DOWNLOAD
+                    with open(out_name, "rb") as file:
+                        st.download_button(
+                            label=f"Download {match_min} - {action[:20]}",
+                            data=file,
+                            file_name=f"{match_min.replace('+', '_')}.mp4",
+                            key=f"btn_{i}"
+                        )
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
     else:
-        st.error("Please provide both inputs.")
+        st.error("Missing inputs.")
