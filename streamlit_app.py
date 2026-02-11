@@ -5,7 +5,7 @@ import re
 import os
 import time
 
-# Robust MoviePy import for version 1.x and 2.x compatibility
+# Robust MoviePy import
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -132,9 +132,9 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
-                # Load video for processing
+                # Use a unique name for the final clip processing
                 video = VideoFileClip(temp_path)
-                st.success(f"Processing {len(events)} clips...")
+                st.success(f"Processing {len(events)} highlights...")
                 
                 for i, (match_min, action) in enumerate(events):
                     event_sec = kickoff_sec + get_seconds(match_min)
@@ -145,14 +145,11 @@ if st.button("🚀 Start Stabilization & Cut"):
                         end_t = min(video.duration, event_sec + 5)
                         
                         # --- VERSION-AGNOSTIC TRIMMING ---
-                        # MoviePy 2.0+ uses sub_clip; earlier versions used subclip.
+                        # Handles MoviePy 2.0+ (sub_clip) and 1.x (subclip)
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start_t, end_t)
-                        elif hasattr(video, 'subclip'):
-                            clip = video.subclip(start_t, end_t)
                         else:
-                            # Final fallback for certain environment configurations
-                            clip = video.cropped(t_start=start_t, t_end=end_t)
+                            clip = video.subclip(start_t, end_t)
                         
                         clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
                     
