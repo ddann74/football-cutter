@@ -23,7 +23,6 @@ if 'workspace' not in st.session_state:
 
 # --- 3. UTILITIES ---
 def parse_report(text):
-    # Extracts timestamps (e.g., 12') and description text
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
@@ -64,7 +63,7 @@ def detect_kickoff_ai(video_path, start_min, end_min):
     cap.release()
     return 0
 
-# --- 4. UI SETUP ---
+# --- 4. UI SETUP & DATA STABILIZATION ---
 st.set_page_config(page_title="Football Cutter Pro", page_icon="⚽", layout="wide")
 st.title("⚽ AI Football Highlight Cutter")
 
@@ -80,7 +79,7 @@ with col1:
 with col2:
     st.metric("Sync Accuracy", "100%" if st.session_state.clips else "0%")
 with col3:
-    st.metric("Status", "Ready" if not st.session_state.clips else "Clips Generated")
+    st.metric("Events Found", len(st.session_state.clips))
 
 # --- 5. INPUTS & FILTERS ---
 st.divider()
@@ -91,22 +90,21 @@ with col_left:
     video_file = st.file_uploader("2. Upload Match Video", type=['mp4', 'mov', 'avi'])
 
 with col_right:
-    # --- NEW SELECTION FILTER ---
-    st.info("🎯 Event Selection Filter")
+    st.info("🎯 Highlight Selection Filter")
     event_filter = st.multiselect(
-        "Select events to clip:",
+        "Only process these events:",
         options=["Goals", "Fouls", "Other Action"],
         default=["Goals", "Fouls"]
     )
     
     st.divider()
-    mode = st.radio("Kickoff Mode:", ["Manual Entry", "AI Auto-Scan"])
+    mode = st.radio("Kickoff Detection:", ["Manual Entry", "AI Auto-Scan"])
     if mode == "Manual Entry":
-        m = st.number_input("Kickoff Minute", 0, 120, 20)
-        s = st.number_input("Kickoff Second", 0, 59, 0)
+        m = st.number_input("Minute", 0, 120, 20)
+        s = st.number_input("Second", 0, 59, 0)
         kickoff_val = (m * 60) + s
     else:
-        search_window = st.slider("AI Search Window", 0, 60, (19, 22))
+        search_window = st.slider("AI Window (Min)", 0, 60, (19, 22))
 
 # --- 6. PROCESSING ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
@@ -121,32 +119,30 @@ if st.button("🚀 Start Stabilization & Cut"):
         
         if kickoff_sec > 0:
             events = parse_report(report_text)
-            st.session_state.clips = [] 
+            st.session_state.clips = [] # Clear for fresh run
             
             for i, (match_min, action) in enumerate(events):
-                # Apply Selection Filter
-                action_lower = action.lower()
-                is_goal = "goal" in action_lower
-                is_foul = "foul" in action_lower
+                # Filter Logic
+                act_lower = action.lower()
+                is_goal = "goal" in act_lower
+                is_foul = "foul" in act_lower
                 
-                label = "GOAL" if is_goal else "FOUL" if is_foul else "ACTION"
-                
-                # Check if user wants this category
                 if is_goal and "Goals" not in event_filter: continue
                 if is_foul and "Fouls" not in event_filter: continue
                 if not is_goal and not is_foul and "Other Action" not in event_filter: continue
 
+                label = "GOAL" if is_goal else "FOUL" if is_foul else "ACTION"
                 target_sec = kickoff_sec + get_seconds(match_min)
                 out_filename = f"{label}_{match_min.replace('+', '_')}_{i}.mp4"
                 out_path = os.path.join(st.session_state.workspace, out_filename)
                 
-                with st.status(f"Cutting {match_min}: {label}"):
+                with st.status(f"Processing {match_min}: {label}"):
+                    # FRESH LOAD: Prevents timing drift
                     video = VideoFileClip(temp_source)
                     start, end = max(0, target_sec - 10), min(video.duration, target_sec + 5)
                     
-                    # MoviePy 2.x Slicing Fix
+                    # MoviePy 2.x Slicing syntax
                     clip = video[start:end]
-                    
                     clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
                     
                     st.session_state.clips.append({
@@ -158,24 +154,26 @@ if st.button("🚀 Start Stabilization & Cut"):
                     clip.close()
                     video.close()
                     gc.collect()
+            
+            st.success("Clipping Complete!")
             st.rerun()
     elif not event_filter:
-        st.error("Please select at least one event type in the filter.")
+        st.error("Please select at least one event type (Goals or Fouls).")
     else:
-        st.error("Missing inputs.")
+        st.error("Missing video or match report.")
 
-# --- 7. PERSISTENT DOWNLOADS ---
+# --- 7. PERSISTENT DOWNLOAD SECTION ---
 if st.session_state.clips:
     st.divider()
-    st.subheader("📥 Download Filtered Highlights")
+    st.subheader("📥 Generated Highlights")
     cols = st.columns(3)
-    for idx, clip_data in enumerate(st.session_state.clips):
+    for idx, clip in enumerate(st.session_state.clips):
         with cols[idx % 3]:
-            if os.path.exists(clip_data["path"]):
-                with open(clip_data["path"], "rb") as f:
+            if os.path.exists(clip["path"]):
+                with open(clip["path"], "rb") as f:
                     st.download_button(
-                        label=clip_data["label"],
+                        label=f"Download {clip['label']}",
                         data=f,
-                        file_name=clip_data["file_name"],
+                        file_name=clip['file_name'],
                         key=f"dl_{idx}"
                     )
