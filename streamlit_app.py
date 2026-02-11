@@ -102,7 +102,7 @@ with col_right:
         manual_total_sec = (man_min * 60) + man_sec
     else:
         st.write("AI will search for the pitch near this window:")
-        search_window = st.slider("Search Window (Minutes)", 0, 60, (15, 25))
+        search_window = st.slider("Search Window (Minutes)", 0, 60, (19, 22))
 
 # --- 6. EXECUTION ---
 if st.button("🚀 Start Stabilization & Cut"):
@@ -132,8 +132,9 @@ if st.button("🚀 Start Stabilization & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
+                # Load video for processing
                 video = VideoFileClip(temp_path)
-                st.success(f"Cutting {len(events)} clips...")
+                st.success(f"Processing {len(events)} clips...")
                 
                 for i, (match_min, action) in enumerate(events):
                     event_sec = kickoff_sec + get_seconds(match_min)
@@ -143,13 +144,15 @@ if st.button("🚀 Start Stabilization & Cut"):
                         start_t = max(0, event_sec - 10)
                         end_t = min(video.duration, event_sec + 5)
                         
-                        # --- FIX: VERSION AGNOSTIC CLIP METHOD ---
-                        # Checks for sub_clip (MoviePy 2.0+) then falls back to subclip (1.0)
+                        # --- VERSION-AGNOSTIC TRIMMING ---
+                        # MoviePy 2.0+ uses sub_clip; earlier versions used subclip.
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start_t, end_t)
-                        else:
+                        elif hasattr(video, 'subclip'):
                             clip = video.subclip(start_t, end_t)
-                        # -----------------------------------------
+                        else:
+                            # Final fallback for certain environment configurations
+                            clip = video.cropped(t_start=start_t, t_end=end_t)
                         
                         clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
                     
