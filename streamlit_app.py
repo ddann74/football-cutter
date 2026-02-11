@@ -5,7 +5,7 @@ import re
 import os
 import time
 
-# --- 1. ROBUST VERSION-SAFE IMPORT ---
+# --- 1. VERSION-SAFE MOVIEPY IMPORT ---
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -59,10 +59,11 @@ def detect_kickoff_ai(video_path, start_min, end_min):
     cap.release()
     return 0
 
-# --- 4. UI SETUP & DATA STABILIZATION ---
+# --- 4. UI SETUP ---
 st.set_page_config(page_title="Football Cutter Pro", page_icon="⚽", layout="wide")
 st.title("⚽ AI Football Highlight Cutter")
 
+# --- 5. SYSTEM DASHBOARD (Data Stabilization) ---
 st.divider()
 st.subheader("System Status")
 col1, col2, col3 = st.columns(3)
@@ -77,7 +78,7 @@ with col3:
     kickoff_display = st.empty()
     kickoff_display.metric("Kickoff Point", "--:--")
 
-# --- 5. INPUTS ---
+# --- 6. INPUTS ---
 st.divider()
 col_left, col_right = st.columns(2)
 
@@ -99,7 +100,7 @@ with col_right:
         st.write("AI Search Window:")
         search_window = st.slider("Window (Minutes)", 0, 60, (19, 22))
 
-# --- 6. CORE ENGINE ---
+# --- 7. CORE ENGINE ---
 if st.button("🚀 Start Stabilization & Cut"):
     if report_text and video_file:
         stabilization_placeholder.warning("🟡 Phase 1: Stabilizing Match Data...")
@@ -112,6 +113,7 @@ if st.button("🚀 Start Stabilization & Cut"):
             with open(temp_path, "wb") as f:
                 f.write(video_file.getbuffer())
             
+            # Lock the Kickoff
             if mode == "Manual Entry":
                 kickoff_sec = manual_total_sec
                 stabilization_placeholder.success("🟢 Phase 2: Manual Stabilization Active")
@@ -131,37 +133,45 @@ if st.button("🚀 Start Stabilization & Cut"):
                 
                 for i, (match_min, action) in enumerate(events):
                     event_sec = kickoff_sec + get_seconds(match_min)
-                    # Unique filename prevents same-file cache issues
+                    
+                    # UNIQUE FILENAME: Prevents the browser from serving a cached version
                     unique_id = int(time.time())
-                    out_name = f"highlight_{unique_id}_{i}.mp4"
+                    out_name = f"clip_{unique_id}_{i}.mp4"
                     
                     with st.status(f"Cutting: {match_min} {action[:15]}..."):
-                        # Open fresh video instance per loop
+                        # RE-LOAD: Ensures a fresh instance for every single highlight
                         video = VideoFileClip(temp_path)
                         start_t = max(0, event_sec - 10)
                         end_t = min(video.duration, event_sec + 5)
                         
-                        # Dynamic Version-Safe Trimming
-                        if hasattr(video, "sub_clip"):
-                            clip = video.sub_clip(start_t, end_t)
-                        elif hasattr(video, "subclip"):
-                            clip = video.subclip(start_t, end_t)
-                        else:
-                            clip = video.sliced(start_t, end_t)
-                        
-                        clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
-                        
-                        # Explicit memory cleanup
-                        clip.close()
-                        video.close()
+                        try:
+                            # --- MOVIEPY 2.X SECURE TRIM ---
+                            # Check for modern sub_clip (v2.x) first
+                            if hasattr(video, 'sub_clip'):
+                                clip = video.sub_clip(start_t, end_t)
+                            elif hasattr(video, 'subclip'):
+                                clip = video.subclip(start_t, end_t)
+                            else:
+                                # Final slicing fallback
+                                clip = video.with_start(start_t).with_end(end_t).with_duration(end_t - start_t)
+                            
+                            clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
+                            
+                            # CLEANUP: Unlocks the file so the next loop can run safely
+                            clip.close()
+                            video.close()
+                        except Exception as e:
+                            st.error(f"Error at {match_min}: {e}")
                     
-                    st.download_button(
-                        label=f"Download {match_min}", 
-                        data=open(out_name, "rb"), 
-                        file_name=f"{match_min}.mp4", 
-                        key=f"btn_{unique_id}_{i}"
-                    )
+                    # DOWNLOAD: Unique keys to prevent Streamlit session conflicts
+                    with open(out_name, "rb") as f:
+                        st.download_button(
+                            label=f"Download {match_min} - {action[:15]}",
+                            data=f,
+                            file_name=f"highlight_{match_min.replace('+', '_')}.mp4",
+                            key=f"dl_{unique_id}_{i}"
+                        )
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
     else:
-        st.error("Missing inputs.")
+        st.error("Missing Match Report or Video File.")
