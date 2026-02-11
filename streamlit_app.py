@@ -46,7 +46,7 @@ def detect_kickoff_ai(video_path, start_min, end_min):
     end_frame = int(end_min * 60 * fps)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
     
-    scan_progress = st.progress(0)
+    scan_progress = st.progress(0, text="AI Scanning for Kickoff...")
     current_frame = start_frame
     while cap.isOpened() and current_frame < end_frame:
         ret, frame = cap.read()
@@ -55,7 +55,7 @@ def detect_kickoff_ai(video_path, start_min, end_min):
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, np.array([35, 40, 40]), np.array([85, 255, 255]))
             green_ratio = np.sum(mask > 0) / (frame.shape[0] * frame.shape[1])
-            scan_progress.progress(min(int(((current_frame - start_frame) / (end_frame - start_frame)) * 100), 100))
+            scan_progress.progress(min((current_frame - start_frame) / (end_frame - start_frame), 1.0))
             if green_ratio > 0.55:
                 cap.release()
                 return current_frame / fps
@@ -79,7 +79,7 @@ with col1:
 with col2:
     st.metric("Sync Accuracy", "100%" if st.session_state.clips else "0%")
 with col3:
-    st.metric("Highlights Generated", len(st.session_state.clips))
+    st.metric("Events Sliced", len(st.session_state.clips))
 
 # --- 5. INPUTS & FILTERS ---
 st.divider()
@@ -98,10 +98,10 @@ with col_right:
     )
     
     st.divider()
-    mode = st.radio("Kickoff Detection Mode:", ["Manual Entry", "AI Auto-Scan"])
+    mode = st.radio("Kickoff Detection:", ["Manual Entry", "AI Auto-Scan"])
     if mode == "Manual Entry":
-        m = st.number_input("Minute", 0, 120, 20)
-        s = st.number_input("Second", 0, 59, 0)
+        m = st.number_input("Kickoff Minute", 0, 120, 20)
+        s = st.number_input("Kickoff Second", 0, 59, 0)
         kickoff_val = (m * 60) + s
     else:
         search_window = st.slider("AI Window (Min)", 0, 60, (19, 22))
@@ -122,11 +122,11 @@ if st.button("🚀 Start Stabilization & Cut"):
             st.session_state.clips = [] 
             
             for i, (match_min, action) in enumerate(events):
-                # Filter Logic
                 act_lower = action.lower()
                 is_goal = "goal" in act_lower
                 is_foul = "foul" in act_lower
                 
+                # Selection Filter Logic
                 if is_goal and "Goals" not in event_filter: continue
                 if is_foul and "Fouls" not in event_filter: continue
                 if not is_goal and not is_foul and "Other Action" not in event_filter: continue
@@ -136,12 +136,12 @@ if st.button("🚀 Start Stabilization & Cut"):
                 out_filename = f"{label}_{match_min.replace('+', '_')}_{i}.mp4"
                 out_path = os.path.join(st.session_state.workspace, out_filename)
                 
-                with st.status(f"Cutting {match_min}: {label}"):
-                    # FRESH LOAD: Reset internal clock to fix timing mismatches
+                with st.status(f"Processing {match_min}: {label}..."):
+                    # FRESH LOAD: Crucial for absolute timing accuracy
                     video = VideoFileClip(temp_source)
                     start, end = max(0, target_sec - 10), min(video.duration, target_sec + 5)
                     
-                    # FIXED: MoviePy 2.x bracket slicing notation
+                    # MOVIEPY 2.X BRACKET SLICING
                     clip = video[start:end]
                     
                     clip.write_videofile(out_path, codec="libx264", audio_codec="aac", logger=None)
@@ -152,19 +152,23 @@ if st.button("🚀 Start Stabilization & Cut"):
                         "file_name": out_filename
                     })
                     
+                    # DEEP CLEANUP: Prevents the app from hanging
                     clip.close()
                     video.close()
+                    del video, clip
                     gc.collect() 
+            
+            st.success("Stabilization Complete!")
             st.rerun()
     elif not event_filter:
         st.error("Please select at least one event type in the filter.")
     else:
-        st.error("Missing video or match report data.")
+        st.error("Please upload a video and paste a report first.")
 
-# --- 7. PERSISTENT DOWNLOAD AREA ---
+# --- 7. PERSISTENT DOWNLOADS ---
 if st.session_state.clips:
     st.divider()
-    st.subheader("📥 Download Stabilized Highlights")
+    st.subheader("📥 Download Highlights")
     cols = st.columns(3)
     for idx, clip in enumerate(st.session_state.clips):
         with cols[idx % 3]:
