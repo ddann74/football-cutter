@@ -5,7 +5,7 @@ import re
 import os
 import time
 
-# Robust MoviePy import for version 1.x and 2.x compatibility
+# Robust MoviePy import
 try:
     from moviepy import VideoFileClip
 except ImportError:
@@ -16,12 +16,12 @@ except ImportError:
 
 # --- 1. DATA EXTRACTION ---
 def parse_report(text):
-    """Extracts match minutes and event descriptions."""
+    """Extracts match minutes and descriptions."""
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
 def get_seconds(time_str):
-    """Converts match clock strings (e.g., 12', 45+2) to seconds."""
+    """Converts match clock strings to seconds."""
     clean_time = re.sub(r"[^0-9+:]", "", time_str)
     if ":" in clean_time:
         parts = clean_time.split(":")
@@ -39,8 +39,7 @@ def get_seconds(time_str):
 def detect_kickoff_ai(video_path, start_min, end_min):
     """Focused AI scan to find the green pitch."""
     cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return 0
+    if not cap.isOpened(): return 0
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
     start_frame = int(start_min * 60 * fps)
     end_frame = int(end_min * 60 * fps)
@@ -95,7 +94,7 @@ with col_right:
     mode = st.radio("Choose Kickoff Detection Method:", ["Manual Entry", "AI Auto-Scan"])
     
     if mode == "Manual Entry":
-        st.write("Set kickoff time (e.g., 20:02):")
+        st.write("Set kickoff time (your 20:00 - 20:04 window):")
         m_col, s_col = st.columns(2)
         man_min = m_col.number_input("Minutes", 0, 120, 20)
         man_sec = s_col.number_input("Seconds", 0, 59, 2)
@@ -143,12 +142,10 @@ if st.button("🚀 Start Stabilization & Cut"):
                         start_t = max(0, event_sec - 10)
                         end_t = min(video.duration, event_sec + 5)
                         
-                        # --- VERSION-AGNOSTIC TRIMMING ---
-                        # Handles MoviePy 2.0+ (sub_clip) and 1.x (subclip)
+                        # V2.0+ SAFE TRIMMING
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start_t, end_t)
                         else:
-                            # Fallback to subclip for older versions
                             clip = video.subclip(start_t, end_t)
                         
                         clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
