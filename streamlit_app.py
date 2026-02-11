@@ -122,7 +122,7 @@ if st.button("🚀 Start AI Sync & Cut"):
             with open(temp_path, "wb") as f:
                 f.write(video_file.getbuffer())
             
-            # Brief pause to ensure file system is ready
+            # Ensure file is ready
             time.sleep(1)
             
             stabilization_placeholder.warning("🟡 Phase 3: Detecting Kickoff...")
@@ -134,7 +134,6 @@ if st.button("🚀 Start AI Sync & Cut"):
                 m, s = divmod(int(kickoff_sec), 60)
                 kickoff_display.metric("Kickoff Found", f"{m:02d}:{s:02d}")
                 
-                # Load video clip
                 video = VideoFileClip(temp_path)
                 st.success(f"Processing {len(events)} highlight clips...")
                 
@@ -146,12 +145,14 @@ if st.button("🚀 Start AI Sync & Cut"):
                         start_t = max(0, event_sec - 10)
                         end_t = min(video.duration, event_sec + 5)
                         
-                        # --- FIX: VERSION INDEPENDENT CLIP METHOD ---
+                        # --- THE FIX: Try both method names to handle MoviePy version differences ---
                         if hasattr(video, 'sub_clip'):
                             clip = video.sub_clip(start_t, end_t)
-                        else:
+                        elif hasattr(video, 'subclip'):
                             clip = video.subclip(start_t, end_t)
-                        # ---------------------------------------------
+                        else:
+                            # Fallback if neither exists
+                            clip = video.cropped(t_start=start_t, t_end=end_t)
                         
                         clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
                     
