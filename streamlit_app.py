@@ -3,26 +3,24 @@ import cv2
 import numpy as np
 import re
 import os
-import time
 
-# --- 1. ROBUST MOVIEPY IMPORT ---
-# MoviePy 2.x removed 'moviepy.editor'. This handles both old and new versions.
+# 1. Version-Safe MoviePy Import
 try:
     from moviepy import VideoFileClip
+    import moviepy.video.fx as vfx
 except ImportError:
     try:
         from moviepy.editor import VideoFileClip
+        import moviepy.video.fx.all as vfx
     except ImportError:
-        st.error("MoviePy not found. Please ensure 'moviepy' is in your requirements.txt")
+        st.error("MoviePy not found. Add 'moviepy' to requirements.txt")
 
 # --- 2. DATA EXTRACTION ---
 def parse_report(text):
-    """Extracts match minutes and descriptions."""
     pattern = r"\(?(\d{1,2}(?:\+\d+)?)(?:'|(?::\d{2})|(?:\s?min)|(?:th minute)|(?:\s?'))\)?[\s:-]*(.*)"
     return re.findall(pattern, text, re.IGNORECASE)
 
 def get_seconds(time_str):
-    """Converts match clock strings (e.g., 12', 45+2) to seconds."""
     clean_time = re.sub(r"[^0-9+:]", "", time_str)
     if ":" in clean_time:
         parts = clean_time.split(":")
@@ -39,8 +37,7 @@ def get_seconds(time_str):
 # --- 3. AI KICKOFF DETECTION ---
 def detect_kickoff_ai(video_path, start_min, end_min):
     cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return 0
+    if not cap.isOpened(): return 0
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
     start_frame = int(start_min * 60 * fps)
     end_frame = int(end_min * 60 * fps)
@@ -67,7 +64,7 @@ def detect_kickoff_ai(video_path, start_min, end_min):
 st.set_page_config(page_title="Football Cutter Pro", page_icon="⚽", layout="wide")
 st.title("⚽ AI Football Highlight Cutter")
 
-# --- 5. SYSTEM STATUS & DATA STABILIZATION ---
+# --- 5. DATA STABILIZATION INDICATOR ---
 st.divider()
 st.subheader("System Status")
 col1, col2, col3 = st.columns(3)
@@ -80,7 +77,7 @@ with col2:
     sync_score.metric("Sync Accuracy", "0%")
 with col3:
     kickoff_display = st.empty()
-    kickoff_display.metric("Kickoff Found", "--:--")
+    kickoff_display.metric("Kickoff Point", "--:--")
 
 # --- 6. INPUTS ---
 st.divider()
@@ -101,7 +98,7 @@ with col_right:
         man_sec = s_col.number_input("Seconds", 0, 59, 2)
         manual_total_sec = (man_min * 60) + man_sec
     else:
-        st.write("AI Search Window:")
+        st.write("AI searches for pitch in this window:")
         search_window = st.slider("Window (Minutes)", 0, 60, (19, 22))
 
 # --- 7. MAIN ENGINE ---
@@ -133,41 +130,35 @@ if st.button("🚀 Start Stabilization & Cut"):
                 kickoff_display.metric("Kickoff Point", f"{m:02d}:{s:02d}")
                 
                 video = VideoFileClip(temp_path)
+                st.success(f"Processing {len(events)} highlights...")
                 
-                # --- BULLETPROOF VERSION-AGNOSTIC TRIMMING ---
-                # This binds the correct function name based on your MoviePy version.
-                trim_func = getattr(video, "sub_clip", getattr(video, "subclip", None))
-                
-                if trim_func:
-                    st.success(f"Processing {len(events)} highlights...")
-                    for i, (match_min, action) in enumerate(events):
-                        event_sec = kickoff_sec + get_seconds(match_min)
-                        out_name = f"highlight_{i}.mp4"
+                for i, (match_min, action) in enumerate(events):
+                    event_sec = kickoff_sec + get_seconds(match_min)
+                    out_name = f"highlight_{i}.mp4"
+                    
+                    with st.status(f"Cutting: {match_min} {action[:15]}..."):
+                        start_t = max(0, event_sec - 10)
+                        end_t = min(video.duration, event_sec + 5)
                         
-                        with st.status(f"Cutting: {match_min} {action[:15]}..."):
-                            start_t = max(0, event_sec - 10)
-                            end_t = min(video.duration, event_sec + 5)
+                        # --- THE ULTIMATE TRIMMING FALLBACK ---
+                        try:
+                            if hasattr(video, "sub_clip"):
+                                clip = video.sub_clip(start_t, end_t)
+                            elif hasattr(video, "subclip"):
+                                clip = video.subclip(start_t, end_t)
+                            elif hasattr(video, "with_section"):
+                                clip = video.with_section(start_t, end_t)
+                            else:
+                                # This uses the internal time-slicing logic directly
+                                # which is the base of all cutting in MoviePy
+                                clip = video.with_start(start_t).with_end(end_t).with_duration(end_t - start_t)
                             
-                            # Execute the detected function
-                            clip = trim_func(start_t, end_t)
-                            clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
-                        
-                        st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}.mp4")
-                else:
-                    # Final fallback using the new 'section' API if others are missing
-                    try:
-                        st.info("Using MoviePy 2.x Section API...")
-                        for i, (match_min, action) in enumerate(events):
-                            event_sec = kickoff_sec + get_seconds(match_min)
-                            out_name = f"highlight_{i}.mp4"
-                            clip = video.section(max(0, event_sec - 10), min(video.duration, event_sec + 5))
                             clip.write_videofile(out_name, codec="libx264", audio_codec="aac", logger=None)
                             st.download_button(f"Download {match_min}", open(out_name, "rb"), file_name=f"{match_min}.mp4")
-                    except Exception as e:
-                        st.error(f"Trimming failed: {e}")
-                
+                        except Exception as e:
+                            st.error(f"Cutting error at {match_min}: {e}")
                 video.close()
             else:
                 stabilization_placeholder.error("🔴 Kickoff Not Detected")
     else:
-        st.error("Please provide both the match report and the video file.")
+        st.error("Please provide both inputs.")
